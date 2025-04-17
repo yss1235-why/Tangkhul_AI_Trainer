@@ -1,9 +1,9 @@
+// src/services/dataProcessor.js
 import { database } from "./firebase";
 import { ref, set, push, get, query, orderByChild, equalTo } from "firebase/database";
-import { createHash } from 'crypto';
 
-// Fallback to a simple hash function if crypto is not available (browser env)
-function simpleHash(str) {
+// Simple hash function for browser environments
+function generateHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
@@ -19,16 +19,6 @@ export function normalizeTangkhulText(text) {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-// Generate hash for deduplication
-export function generateHash(text) {
-  try {
-    return createHash('md5').update(text).digest('hex');
-  } catch (e) {
-    // Fallback for browser environment
-    return simpleHash(text);
-  }
 }
 
 // Check if entry exists
