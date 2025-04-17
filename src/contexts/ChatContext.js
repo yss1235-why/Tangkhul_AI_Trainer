@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from "react";
+import React, { createContext, useState, useContext, useEffect, useCallback } from "react";
 import { useAuth } from "./AuthContext";
 import { database } from "../services/firebase";
 import { ref, push, set, get, onValue } from "firebase/database";
@@ -16,6 +16,54 @@ export function ChatProvider({ children }) {
   const [conversationId, setConversationId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [apiProvider, setApiProvider] = useState("perplexity"); // or "chatgpt"
+
+  // Use useCallback to prevent recreation of this function on each render
+  const createNewConversation = useCallback(async () => {
+    if (currentUser) {
+      const conversationsRef = ref(database, "conversations");
+      const newConversationRef = push(conversationsRef);
+      
+      await set(newConversationRef, {
+        startTime: Date.now(),
+        trainerId: currentUser.uid,
+        status: "active",
+        messageCount: 0
+      });
+      
+      // Set as active conversation
+      await set(ref(database, `trainers/${currentUser.uid}/activeConversation`), newConversationRef.key);
+      
+      setConversationId(newConversationRef.key);
+      setMessages([]);
+      
+      // Add AI welcome message
+      await sendAIMessage("Welcome to Tangkhul AI Trainer. How are you doing today?");
+      
+      setLoading(false);
+    }
+  }, [currentUser]); // Include sendAIMessage as a dependency once we define it
+
+  // Define sendAIMessage with useCallback
+  const sendAIMessage = useCallback(async (text) => {
+    if (!conversationId) return;
+    
+    const messagesRef = ref(database, `conversations/${conversationId}/messages`);
+    const newMessageRef = push(messagesRef);
+    
+    const message = {
+      sender: "ai",
+      text,
+      timestamp: Date.now()
+    };
+    
+    await set(newMessageRef, message);
+  }, [conversationId]);
+
+  // Update the createNewConversation to include sendAIMessage
+  useEffect(() => {
+    // Update the reference to sendAIMessage
+    createNewConversation.sendAIMessage = sendAIMessage;
+  }, [createNewConversation, sendAIMessage]);
 
   // Initialize or load conversation
   useEffect(() => {
@@ -47,68 +95,7 @@ export function ChatProvider({ children }) {
         }
       });
     }
-  }, [currentUser]);
-
-  async function createNewConversation() {
-    if (currentUser) {
-      const conversationsRef = ref(database, "conversations");
-      const newConversationRef = push(conversationsRef);
-      
-      await set(newConversationRef, {
-        startTime: Date.now(),
-        trainerId: currentUser.uid,
-        status: "active",
-        messageCount: 0
-      });
-      
-      // Set as active conversation
-      await set(ref(database, `trainers/${currentUser.uid}/activeConversation`), newConversationRef.key);
-      
-      setConversationId(newConversationRef.key);
-      setMessages([]);
-      
-      // Add AI welcome message
-      await sendAIMessage("Welcome to Tangkhul AI Trainer. How are you doing today?");
-      
-      setLoading(false);
-    }
-  }
-
-  async function sendTrainerMessage(text) {
-    if (!conversationId) return;
-    
-    const messagesRef = ref(database, `conversations/${conversationId}/messages`);
-    const newMessageRef = push(messagesRef);
-    
-    const message = {
-      sender: "trainer",
-      text,
-      timestamp: Date.now()
-    };
-    
-    await set(newMessageRef, message);
-    
-    // Process message for potential language examples
-    processMessageForExamples(text);
-    
-    // Generate AI response
-    await generateAIResponse(text);
-  }
-
-  async function sendAIMessage(text) {
-    if (!conversationId) return;
-    
-    const messagesRef = ref(database, `conversations/${conversationId}/messages`);
-    const newMessageRef = push(messagesRef);
-    
-    const message = {
-      sender: "ai",
-      text,
-      timestamp: Date.now()
-    };
-    
-    await set(newMessageRef, message);
-  }
+  }, [currentUser, createNewConversation]); // Add createNewConversation to the dependency array
 
   async function processMessageForExamples(text) {
     // This is a simplified detection logic
@@ -181,6 +168,27 @@ export function ChatProvider({ children }) {
       await sendAIMessage("I'm experiencing some technical difficulties. Please try again later.");
     }
   }
+
+  const sendTrainerMessage = useCallback(async (text) => {
+    if (!conversationId) return;
+    
+    const messagesRef = ref(database, `conversations/${conversationId}/messages`);
+    const newMessageRef = push(messagesRef);
+    
+    const message = {
+      sender: "trainer",
+      text,
+      timestamp: Date.now()
+    };
+    
+    await set(newMessageRef, message);
+    
+    // Process message for potential language examples
+    await processMessageForExamples(text);
+    
+    // Generate AI response
+    await generateAIResponse(text);
+  }, [conversationId]);
 
   const value = {
     messages,
