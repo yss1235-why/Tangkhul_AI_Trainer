@@ -1,4 +1,3 @@
-// src/contexts/ChatContext.js
 import React, { createContext, useState, useContext, useEffect } from "react";
 import { useAuth } from "./AuthContext";
 import { database } from "../services/firebase";
@@ -135,21 +134,52 @@ export function ChatProvider({ children }) {
   }
 
   async function generateAIResponse(trainerMessage) {
-    // This function would call your serverless function to invoke the AI API
-    // For this implementation, we'll use a placeholder response
-    
-    // Check API usage and switch if needed
-    const usageRef = ref(database, "apiUsage/perplexity");
-    const usageSnapshot = await get(usageRef);
-    
-    if (usageSnapshot.exists() && usageSnapshot.val() > 5.0) {
-      setApiProvider("chatgpt");
+    try {
+      // Call the serverless function to get AI response
+      const response = await fetch('/api/ai-proxy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "system",
+              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Use only English in your responses. Ask questions that prompt Tangkhul language responses, seek clarification about grammar, and engage in natural conversation."
+            },
+            ...messages.map(msg => ({
+              role: msg.sender === "trainer" ? "user" : "assistant",
+              content: msg.text
+            })),
+            {
+              role: "user",
+              content: trainerMessage
+            }
+          ],
+          apiProvider
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (data.response) {
+        await sendAIMessage(data.response);
+      } else {
+        // Fallback message if API call fails
+        await sendAIMessage("I'm sorry, I couldn't process that. Could you please try again?");
+      }
+      
+      // Check if we need to switch API providers
+      const usageRef = ref(database, "apiUsage/perplexity");
+      const usageSnapshot = await get(usageRef);
+      
+      if (usageSnapshot.exists() && usageSnapshot.val() > 5.0) {
+        setApiProvider("chatgpt");
+      }
+    } catch (error) {
+      console.error("Error generating AI response:", error);
+      await sendAIMessage("I'm experiencing some technical difficulties. Please try again later.");
     }
-    
-    // Placeholder AI response
-    const aiResponse = "Thank you for sharing that. Could you tell me more about how you would express this concept in Tangkhul?";
-    
-    await sendAIMessage(aiResponse);
   }
 
   const value = {
