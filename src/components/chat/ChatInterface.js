@@ -1,9 +1,10 @@
-// src/components/chat/ChatInterface.js
 import React, { useState, useRef, useEffect } from "react";
 import { useChat } from "../../contexts/ChatContext";
+import { useAuth } from "../../contexts/AuthContext";
 
 export default function ChatInterface() {
   const { messages, sendTrainerMessage, loading } = useChat();
+  const { logout } = useAuth();
   const [message, setMessage] = useState("");
   const messagesEndRef = useRef(null);
 
@@ -32,16 +33,39 @@ export default function ChatInterface() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.error("Failed to log out", error);
+    }
+  };
+
   if (loading) {
-    return <div className="flex items-center justify-center h-full">Loading conversation...</div>;
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-teal-300 mx-auto"></div>
+          <p className="mt-4 text-gray-700">Loading conversation...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col h-screen bg-gray-100 max-w-md mx-auto overflow-hidden">
       {/* Header */}
-      <div className="bg-teal-200 text-gray-700 p-4 shadow-md">
-        <h1 className="text-xl font-bold">Tangkhul AI Trainer</h1>
-        <p className="text-sm">Collecting conversational data</p>
+      <div className="bg-teal-200 text-gray-700 p-4 shadow-md flex justify-between items-center">
+        <div>
+          <h1 className="text-xl font-bold">Tangkhul AI Trainer</h1>
+          <p className="text-sm">Collecting conversational data</p>
+        </div>
+        <button
+          onClick={handleLogout}
+          className="text-gray-700 hover:text-gray-900"
+        >
+          Logout
+        </button>
       </div>
 
       {/* Chat area */}
