@@ -1,10 +1,6 @@
 const fetch = require('node-fetch');
-const path = require('path');
 
-// Import the shared ChatContext utilities using a path that works in the functions directory
-const ChatContextUtils = require('../src/shared/ChatContextUtils');
-
-// Destructure the utilities we need
+// Import the local chatContext module instead of trying to import from src
 const {
   conversationHistories,
   translationPrompts,
@@ -13,7 +9,7 @@ const {
   getClarificationResponse,
   createSystemMessage,
   validateMessageSequence
-} = ChatContextUtils;
+} = require('./chatContext');
 
 exports.handler = async function(event, context) {
   const headers = {
