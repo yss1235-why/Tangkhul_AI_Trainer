@@ -22,6 +22,7 @@ exports.handler = async function(event, context) {
   try {
     // Parse request body
     const requestBody = JSON.parse(event.body);
+    console.log('Request body keys:', Object.keys(requestBody));
     
     // Extract message data
     let userMessage = "";
@@ -47,6 +48,8 @@ exports.handler = async function(event, context) {
         }
       ];
     }
+    
+    console.log('User message:', userMessage);
     
     if (!userMessage) {
       return {
@@ -76,9 +79,45 @@ exports.handler = async function(event, context) {
       };
     }
     
-    // Try to call APIs with retries and proper rate limiting
+    // Try to call OpenAI first
     try {
-      // First try Perplexity (switching the order since OpenAI has rate limit issues)
+      console.log('Attempting OpenAI API call');
+      
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error('Missing OpenAI API key');
+      }
+      
+      // Check rate limiting for OpenAI
+      const now = Date.now();
+      const timeSinceLastCall = now - rateLimitMap.lastOpenAICall;
+      
+      if (timeSinceLastCall < 3000) {
+        // Wait if needed to respect rate limits
+        await new Promise(resolve => setTimeout(resolve, 3000 - timeSinceLastCall));
+      }
+      
+      // Update last call time
+      rateLimitMap.lastOpenAICall = Date.now();
+      
+      const aiResponse = await callOpenAIAPI(userMessage);
+      console.log('OpenAI API call successful, response:', aiResponse);
+      
+      if (!aiResponse) {
+        throw new Error('Empty response from OpenAI');
+      }
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          response: aiResponse + "\n\n(OpenAI)",
+          provider: 'openai'
+        })
+      };
+    } catch (openaiError) {
+      console.error('OpenAI API error:', openaiError.message);
+      
+      // Try Perplexity as fallback
       try {
         console.log('Attempting Perplexity API call');
         
@@ -86,7 +125,7 @@ exports.handler = async function(event, context) {
           throw new Error('Missing Perplexity API key');
         }
         
-        // Check rate limiting for Perplexity - ensure at least 2 seconds between calls
+        // Check rate limiting for Perplexity
         const now = Date.now();
         const timeSinceLastCall = now - rateLimitMap.lastPerplexityCall;
         
@@ -99,7 +138,11 @@ exports.handler = async function(event, context) {
         rateLimitMap.lastPerplexityCall = Date.now();
         
         const perplexityResponse = await callPerplexityAPI(messagesArray);
-        console.log('Perplexity API call successful');
+        console.log('Perplexity API call successful, response:', perplexityResponse);
+        
+        if (!perplexityResponse) {
+          throw new Error('Empty response from Perplexity');
+        }
         
         return {
           statusCode: 200,
@@ -112,62 +155,33 @@ exports.handler = async function(event, context) {
       } catch (perplexityError) {
         console.error('Perplexity API error:', perplexityError.message);
         
-        // Try OpenAI as backup, with rate limiting
-        console.log('Attempting OpenAI API call');
+        // If both APIs fail, provide a simple language-based response
+        const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+        let fallbackResponse;
         
-        if (!process.env.OPENAI_API_KEY) {
-          throw new Error('Missing OpenAI API key');
+        if (hasTangkhulChars) {
+          fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
+        } else if (['hi', 'hello', 'hey'].includes(normalizedMessage)) {
+          fallbackResponse = "Hello! I'm interested in learning Tangkhul language examples. Could you share a phrase in Tangkhul with me?";
+        } else {
+          fallbackResponse = "Thank you for your message. I'd love to learn some Tangkhul phrases. Could you share a word or expression?";
         }
-        
-        // Check rate limiting for OpenAI - ensure at least 3 seconds between calls
-        // (OpenAI has stricter rate limits)
-        const now = Date.now();
-        const timeSinceLastCall = now - rateLimitMap.lastOpenAICall;
-        
-        if (timeSinceLastCall < 3000) {
-          // Wait if needed to respect rate limits
-          await new Promise(resolve => setTimeout(resolve, 3000 - timeSinceLastCall));
-        }
-        
-        // Update last call time
-        rateLimitMap.lastOpenAICall = Date.now();
-        
-        const aiResponse = await callOpenAIAPI(userMessage);
-        console.log('OpenAI API call successful');
         
         return {
           statusCode: 200,
           headers,
           body: JSON.stringify({ 
-            response: aiResponse + "\n\n(OpenAI)",
-            provider: 'openai'
+            response: fallbackResponse + "\n\n(API Error - " + 
+                     "OpenAI: " + openaiError.message + ", " +
+                     "Perplexity: " + perplexityError.message + ")",
+            provider: 'fallback',
+            apiErrors: {
+              openai: openaiError.message,
+              perplexity: perplexityError.message
+            }
           })
         };
       }
-    } catch (error) {
-      console.error('All API calls failed:', error.message);
-      
-      // If both APIs fail, provide a simple language-based response
-      const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-      let fallbackResponse;
-      
-      if (hasTangkhulChars) {
-        fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
-      } else if (['hi', 'hello', 'hey'].includes(normalizedMessage)) {
-        fallbackResponse = "Hello! I'm interested in learning Tangkhul language examples. Could you share a phrase in Tangkhul with me?";
-      } else {
-        fallbackResponse = "Thank you for your message. I'd love to learn some Tangkhul phrases. Could you share a word or expression?";
-      }
-      
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ 
-          response: fallbackResponse + "\n\n(API Error - Please check your API keys)",
-          provider: 'fallback',
-          apiError: error.message
-        })
-      };
     }
   } catch (error) {
     console.error('Function error:', error.message);
@@ -176,7 +190,7 @@ exports.handler = async function(event, context) {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery)",
+        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery - " + error.message + ")",
         error: error.message
       })
     };
@@ -217,59 +231,54 @@ async function callOpenAIAPI(userMessage) {
     }
   ];
   
-  // Use a more efficient model to reduce costs and rate limits
-  const model = "gpt-3.5-turbo-instruct";
-  
   try {
-    // Implement retry logic with exponential backoff
-    let retries = 0;
-    const maxRetries = 2;
+    console.log('Sending request to OpenAI with messages:', JSON.stringify(messages));
     
-    while (retries <= maxRetries) {
-      try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${openaiKey}`
-          },
-          body: JSON.stringify({
-            model: 'gpt-3.5-turbo',
-            messages: messages,
-            max_tokens: 300,  // Reduced to save on tokens
-            temperature: 0.7
-          })
-        });
-        
-        if (response.status === 429) {
-          // Rate limit hit, apply exponential backoff
-          const waitTime = Math.pow(2, retries) * 1000;
-          console.log(`Rate limit hit, waiting ${waitTime}ms before retry`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retries++;
-          continue;
-        }
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (!data.choices || !data.choices.length || !data.choices[0].message) {
-          throw new Error('Unexpected response format from OpenAI API');
-        }
-        
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: messages,
+        max_tokens: 300,
+        temperature: 0.7
+      })
+    });
+    
+    console.log('OpenAI response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI error response:', errorText);
+      throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('OpenAI response structure:', JSON.stringify(Object.keys(data)));
+    
+    if (data.choices && data.choices.length > 0) {
+      console.log('OpenAI choices structure:', JSON.stringify(Object.keys(data.choices[0])));
+      
+      // Check for both formats - chat completions and completions
+      if (data.choices[0].message && data.choices[0].message.content) {
+        // Chat completions format
         return data.choices[0].message.content.trim();
-      } catch (error) {
-        if (retries >= maxRetries || error.message.includes('API key')) {
-          throw error;
-        }
-        retries++;
+      } else if (data.choices[0].text) {
+        // Completions format
+        return data.choices[0].text.trim();
+      } else {
+        console.error('Unknown OpenAI response format:', JSON.stringify(data.choices[0]));
+        throw new Error('Unexpected response format from OpenAI API');
       }
+    } else {
+      console.error('No choices in OpenAI response:', JSON.stringify(data));
+      throw new Error('No completion choices returned from OpenAI');
     }
   } catch (error) {
+    console.error('Error in OpenAI API call:', error);
     throw error;
   }
 }
@@ -281,15 +290,24 @@ async function callPerplexityAPI(messages) {
     throw new Error('Missing Perplexity API key');
   }
   
-  // Ensure messages are in the correct format
-  const formattedMessages = messages.map(msg => ({
+  // Make sure we have a proper messages array
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new Error('Invalid messages array for Perplexity API');
+  }
+  
+  // Find the user message for debugging
+  const userMessage = messages.find(msg => msg.role === 'user')?.content || '';
+  console.log('User message being sent to Perplexity:', userMessage);
+  
+  // Ensure all messages have proper structure
+  const validMessages = messages.map(msg => ({
     role: msg.role,
     content: msg.content
   }));
   
-  // Ensure we have a system message
-  if (!formattedMessages.some(msg => msg.role === 'system')) {
-    formattedMessages.unshift({
+  // Make sure we have a system message
+  if (!validMessages.some(msg => msg.role === 'system')) {
+    validMessages.unshift({
       role: 'system',
       content: 'You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time.'
     });
@@ -298,60 +316,67 @@ async function callPerplexityAPI(messages) {
   // Simplified request for Perplexity - only using required parameters
   const requestBody = {
     model: "sonar",
-    messages: formattedMessages,
+    messages: validMessages,
     max_tokens: 300
   };
   
+  console.log('Sending request to Perplexity:', JSON.stringify(requestBody));
+  
   try {
-    // Implement retry logic with exponential backoff
-    let retries = 0;
-    const maxRetries = 2;
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${perplexityKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
     
-    while (retries <= maxRetries) {
-      try {
-        const response = await fetch('https://api.perplexity.ai/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${perplexityKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        });
-        
-        if (response.status === 429) {
-          // Rate limit hit, apply exponential backoff
-          const waitTime = Math.pow(2, retries) * 1000;
-          console.log(`Rate limit hit, waiting ${waitTime}ms before retry`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retries++;
-          continue;
-        }
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (!data.choices || !data.choices.length || !data.choices[0].message) {
-          throw new Error('Unexpected response format from Perplexity API');
-        }
-        
+    console.log('Perplexity response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Perplexity error response:', errorText);
+      throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Perplexity response structure:', JSON.stringify(Object.keys(data)));
+    
+    if (data.choices && data.choices.length > 0) {
+      console.log('Perplexity choices structure:', JSON.stringify(Object.keys(data.choices[0])));
+      
+      // Check for proper response format
+      if (data.choices[0].message && data.choices[0].message.content) {
         let aiResponse = data.choices[0].message.content;
         
-        // Remove thinking sections if present
-        aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        // Log the full response before any processing
+        console.log('Raw Perplexity response:', aiResponse);
+        
+        // First check if there are thinking sections to remove
+        if (aiResponse.includes('<think>')) {
+          console.log('Detected thinking sections, removing them');
+          aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          console.log('Response after removing thinking sections:', aiResponse);
+        }
+        
+        // If after removing thinking sections we have nothing left, use the original response
+        if (!aiResponse) {
+          console.log('Empty response after removing thinking sections, using original');
+          aiResponse = data.choices[0].message.content.trim();
+        }
         
         return aiResponse;
-      } catch (error) {
-        if (retries >= maxRetries || error.message.includes('API key')) {
-          throw error;
-        }
-        retries++;
+      } else {
+        console.error('Unknown Perplexity response format:', JSON.stringify(data.choices[0]));
+        throw new Error('Unexpected response format from Perplexity API');
       }
+    } else {
+      console.error('No choices in Perplexity response:', JSON.stringify(data));
+      throw new Error('No completion choices returned from Perplexity');
     }
   } catch (error) {
+    console.error('Error in Perplexity API call:', error);
     throw error;
   }
 }
