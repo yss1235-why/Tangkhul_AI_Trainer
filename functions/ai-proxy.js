@@ -3,6 +3,25 @@ const fetch = require('node-fetch');
 // Store conversation histories in memory (will reset on function restart)
 const conversationHistories = {};
 
+// Common English words/phrases to ask for translations
+const translationPrompts = [
+  "How would you say 'hello' in Tangkhul?",
+  "What's the Tangkhul word for 'thank you'?",
+  "How do you say 'good morning' in Tangkhul?",
+  "What do you call 'water' in Tangkhul?",
+  "How would you translate 'friend' to Tangkhul?",
+  "What's the Tangkhul word for 'family'?",
+  "How do people say 'goodbye' in Tangkhul?",
+  "What do you call 'food' in Tangkhul?",
+  "How would you say 'I am happy' in Tangkhul?",
+  "What's the word for 'house' in Tangkhul?",
+  "How do you say 'beautiful' in Tangkhul?",
+  "What's the Tangkhul term for 'village'?",
+  "How would you translate 'rain' to Tangkhul?",
+  "What do you call 'sun' in Tangkhul?",
+  "How do you say 'love' in Tangkhul?"
+];
+
 exports.handler = async function(event, context) {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -40,11 +59,14 @@ exports.handler = async function(event, context) {
     console.log('User message:', userMessage);
     
     if (!userMessage) {
+      // Get a random translation prompt
+      const randomPrompt = translationPrompts[Math.floor(Math.random() * translationPrompts.length)];
+      
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: "I'd like to learn some Tangkhul phrases. Could you share a word or sentence in Tangkhul with me?\n\n(Fallback System)",
+          response: randomPrompt + "\n\n(Fallback System)",
           provider: 'fallback',
           conversationId: conversationId
         })
@@ -56,13 +78,13 @@ exports.handler = async function(event, context) {
     
     // Special handling for common English phrases
     const commonEnglishPhrases = {
-      'hi': "Hi there! I'm collecting examples of Tangkhul language. Could you teach me a word or phrase in Tangkhul?",
-      'hello': "Hello! I'd love to learn some Tangkhul words or phrases. Could you share one with me?",
-      'hey': "Hey! I'm interested in learning Tangkhul language. Could you share a common greeting or phrase?",
-      'okay': "Great! I'd love to learn a Tangkhul word or phrase. What would you like to teach me?",
-      'ok': "Wonderful! Could you share a Tangkhul word or phrase with me?",
-      'sure': "Thanks! I'm excited to learn. What Tangkhul word or phrase would you like to share?",
-      'yes': "Great! What Tangkhul word or phrase would you like to teach me today?"
+      'hi': getRandomTranslationPrompt("greeting"),
+      'hello': getRandomTranslationPrompt("greeting"),
+      'hey': getRandomTranslationPrompt("greeting"),
+      'okay': getRandomTranslationPrompt("general"),
+      'ok': getRandomTranslationPrompt("general"),
+      'sure': getRandomTranslationPrompt("general"),
+      'yes': getRandomTranslationPrompt("general")
     };
     
     // Check if message is a common English phrase that needs a direct response
@@ -149,9 +171,10 @@ exports.handler = async function(event, context) {
       if (hasTangkhulChars) {
         fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
       } else if (['hi', 'hello', 'hey'].includes(normalizedMessage)) {
-        fallbackResponse = "Hello! I'm interested in learning Tangkhul language examples. Could you share a phrase in Tangkhul with me?";
+        fallbackResponse = getRandomTranslationPrompt("greeting");
       } else {
-        fallbackResponse = "Thank you for your message. I'd love to learn some Tangkhul phrases. Could you share a word or expression?";
+        // Default to asking about an everyday object or concept
+        fallbackResponse = getRandomTranslationPrompt("general");
       }
       
       // Add the fallback response to history
@@ -174,34 +197,71 @@ exports.handler = async function(event, context) {
   } catch (error) {
     console.error('Function error:', error.message);
     
+    // Default to a translation prompt if there's an error
+    const randomPrompt = translationPrompts[Math.floor(Math.random() * translationPrompts.length)];
+    
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery)",
+        response: randomPrompt + "\n\n(Error Recovery)",
         error: error.message
       })
     };
   }
 };
 
-// Create a clear, conversational system message
+// Function to get a random translation prompt based on category
+function getRandomTranslationPrompt(category) {
+  // Greeting category prompts
+  const greetingPrompts = [
+    "Nice to meet you! How would you say 'hello' in Tangkhul?",
+    "Hello there! What's the Tangkhul word for 'greeting'?",
+    "Hi! I'd love to know how to say 'good morning' in Tangkhul.",
+    "Hello! How do people greet each other in Tangkhul?",
+    "Hi there! Could you teach me how to say 'welcome' in Tangkhul?"
+  ];
+  
+  // General category prompts (everyday objects and concepts)
+  const generalPrompts = [
+    "What do you call 'water' in Tangkhul?",
+    "How would you say 'food' in Tangkhul language?",
+    "What's the Tangkhul word for 'friend'?",
+    "How do you say 'thank you' in Tangkhul?",
+    "What do you call 'home' or 'house' in Tangkhul?",
+    "How would you translate 'village' to Tangkhul?",
+    "What's the Tangkhul term for 'family'?",
+    "How do you say 'tree' in Tangkhul?",
+    "What do people call the 'sun' in Tangkhul?",
+    "How would you say 'beautiful' in Tangkhul?",
+    "What's the Tangkhul word for 'love'?",
+    "How do you say 'goodbye' in Tangkhul?"
+  ];
+  
+  // Select appropriate category
+  const promptList = category === "greeting" ? greetingPrompts : generalPrompts;
+  
+  // Return a random prompt from the selected category
+  return promptList[Math.floor(Math.random() * promptList.length)];
+}
+
+// Create a translation-focused system message
 function createSystemMessage() {
   return {
     role: "system",
-    content: `You are a conversational AI assistant designed to collect Tangkhul language examples. Your purpose is to engage users in a friendly conversation and encourage them to share Tangkhul words and phrases.
+    content: `You are a conversational AI assistant designed to collect Tangkhul language examples. Your purpose is to collect specific Tangkhul words and phrases by asking targeted translation questions.
 
 IMPORTANT INSTRUCTIONS:
-1. Maintain a casual, friendly tone like a language learning partner
-2. Do NOT give educational explanations of English words
-3. Always respond conversationally, not academically
+1. Focus on asking for specific translations: "How do you say X in Tangkhul?"
+2. Ask about everyday objects, actions, greetings, or common phrases
+3. Maintain a casual, friendly tone
 4. Keep responses short (1-3 sentences)
-5. Always end with a simple question asking for Tangkhul language examples
-6. If the user shares a Tangkhul word/phrase, ask what it means in English
-7. If the user shares a meaning in English, thank them and ask for another phrase
-8. NEVER explain what English greetings like "hi" or "hello" mean
+5. If the user shares a Tangkhul word/phrase, ask what it means in English
+6. If the user shares a meaning in English, thank them and ask for another specific translation
+7. Move through different topics: greetings, food, family, nature, emotions, etc.
+8. Ask one specific translation question at a time
 
-Remember that you are in a conversation to collect Tangkhul language examples, not to provide information or education.`
+Your goal is to collect precise vocabulary and phrases in Tangkhul through directed translation questions.`
   };
 }
 
@@ -237,7 +297,7 @@ function validateMessageSequence(messages) {
       // Insert a dummy assistant message
       result.splice(i + 1, 0, {
         role: 'assistant',
-        content: "I'd like to learn more about Tangkhul language."
+        content: "How would you say 'hello' in Tangkhul?"
       });
       i++; // Skip the inserted message in next iteration
     }
@@ -258,7 +318,7 @@ function validateMessageSequence(messages) {
     // This shouldn't happen in our use case, but handle it
     result.push({
       role: 'user',
-      content: "Please tell me more about Tangkhul."
+      content: "I'd like to share a Tangkhul word."
     });
   }
   
