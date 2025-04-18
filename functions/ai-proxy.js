@@ -14,207 +14,239 @@ exports.handler = async function(event, context) {
   console.log('Request received');
 
   try {
+    // Log raw event for debugging
+    console.log('Raw event body:', event.body);
+    
+    // Parse request body
     const requestBody = JSON.parse(event.body);
+    console.log('Parsed request body:', JSON.stringify(requestBody));
     
-    // Extract messages array and user message correctly
-    let messagesArray = [];
-    let userMessage = "";
+    // Extract message data
+    let messageText = "";
     
+    // Try to extract message from various possible structures
     if (requestBody.messages && Array.isArray(requestBody.messages)) {
-      messagesArray = requestBody.messages;
-      
-      // Get the last user message
-      const userMessages = messagesArray.filter(msg => msg.role === "user");
+      const userMessages = requestBody.messages.filter(msg => msg.role === "user");
       if (userMessages.length > 0) {
-        userMessage = userMessages[userMessages.length - 1].content;
+        messageText = userMessages[userMessages.length - 1].content;
       }
     } else if (requestBody.message) {
-      userMessage = requestBody.message;
-      messagesArray = [
-        {
-          role: "user",
-          content: userMessage
-        }
-      ];
+      messageText = requestBody.message;
+    } else if (typeof requestBody === 'string') {
+      messageText = requestBody;
     }
     
-    console.log('User message:', userMessage);
+    console.log('Extracted message text:', messageText);
     
-    // Perform initial language detection to enhance system prompt
-    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-    const normalizedMessage = userMessage.toLowerCase().trim();
-    
-    // Common English words for quick detection
-    const englishWords = ['a', 'the', 'is', 'are', 'am', 'i', 'you', 'he', 'she', 'we', 'they', 
-                         'how', 'what', 'when', 'where', 'why', 'who', 'can', 'could', 'will', 'would'];
-    
-    const words = normalizedMessage.split(/\s+/);
-    let englishWordCount = 0;
-    
-    words.forEach(word => {
-      const cleanWord = word.replace(/[.,?!;:'"()]/g, '');
-      if (englishWords.includes(cleanWord)) {
-        englishWordCount++;
-      }
-    });
-    
-    // Enhance system prompt based on language detection
-    const isLikelyEnglish = englishWordCount >= 2 || 
-                          normalizedMessage.startsWith('how') || 
-                          normalizedMessage.startsWith('what') ||
-                          normalizedMessage.startsWith('when') ||
-                          normalizedMessage.startsWith('where') ||
-                          normalizedMessage.startsWith('why');
-    
-    const isLikelyTangkhul = hasTangkhulChars || 
-                           (words.length <= 2 && !isLikelyEnglish);
-    
-    // Find and update the system message with enhanced guidance
-    const systemMessageIndex = messagesArray.findIndex(msg => msg.role === "system");
-    let systemPrompt = "You are an AI assistant designed to collect Tangkhul language examples.";
-    
-    if (systemMessageIndex >= 0) {
-      systemPrompt = messagesArray[systemMessageIndex].content;
+    if (!messageText) {
+      console.log('No message text could be extracted, using default');
+      messageText = "Hello";
     }
     
-    // Add language-specific instructions based on detection
-    let enhancedSystemPrompt = systemPrompt;
-    
-    if (isLikelyEnglish) {
-      enhancedSystemPrompt += " The user's current message appears to be in English. Respond appropriately in English and ask a question to elicit Tangkhul language examples.";
-    } else if (isLikelyTangkhul) {
-      enhancedSystemPrompt += " The user's current message appears to be in Tangkhul. Ask them politely what it means in English.";
-    }
-    
-    // Update or add the system message
-    if (systemMessageIndex >= 0) {
-      messagesArray[systemMessageIndex].content = enhancedSystemPrompt;
-    } else {
-      messagesArray.unshift({
-        role: "system",
-        content: enhancedSystemPrompt
-      });
-    }
-    
-    // Try Perplexity first (primary service)
+    // Handle API calls with try-catch for each provider
     try {
-      console.log('Attempting Perplexity API call');
-      const perplexityResponse = await callPerplexityAPI(messagesArray);
-      console.log('Perplexity API call successful');
+      console.log('Attempting OpenAI API call');
+      const aiResponse = await callOpenAIAPI(messageText);
+      console.log('OpenAI API call successful');
       
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: perplexityResponse,
-          provider: 'perplexity'
+          response: aiResponse,
+          provider: 'openai'
         })
       };
-    } catch (perplexityError) {
-      // Log the error and fall back to OpenAI
-      console.error('Perplexity API error:', perplexityError);
-      console.log('Falling back to OpenAI API');
+    } catch (openaiError) {
+      console.error('OpenAI API error:', openaiError);
       
-      const openaiResponse = await callOpenAIAPI(userMessage, isLikelyEnglish, isLikelyTangkhul);
-      
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ 
-          response: openaiResponse,
-          provider: 'openai',
-          fallback: true
-        })
-      };
+      // Try Perplexity as fallback
+      try {
+        console.log('Attempting Perplexity API call');
+        
+        // Prepare messages for Perplexity
+        const messages = [
+          {
+            role: "system",
+            content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples."
+          },
+          {
+            role: "user",
+            content: messageText
+          }
+        ];
+        
+        const perplexityResponse = await callPerplexityAPI(messages);
+        console.log('Perplexity API call successful');
+        
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ 
+            response: perplexityResponse,
+            provider: 'perplexity'
+          })
+        };
+      } catch (perplexityError) {
+        console.error('Perplexity API error:', perplexityError);
+        
+        // If both APIs fail, provide a fallback response based on message content
+        const normalizedMessage = messageText.toLowerCase().trim();
+        
+        // Simple language detection
+        const hasTangkhulChars = /[ĀāA̲a̲]/.test(messageText);
+        const commonEnglishWords = ['hi', 'hello', 'hey', 'yes', 'no', 'thanks', 'how', 'what', 'when', 'where', 'why'];
+        const isSimpleEnglish = commonEnglishWords.some(word => normalizedMessage === word || normalizedMessage.startsWith(word + ' '));
+        
+        let fallbackResponse;
+        if (hasTangkhulChars) {
+          fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
+        } else if (isSimpleEnglish) {
+          fallbackResponse = "I'd like to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul?";
+        } else {
+          fallbackResponse = "Thank you for your message. Could you share a phrase or word in Tangkhul with me?";
+        }
+        
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ 
+            response: fallbackResponse,
+            provider: 'fallback',
+            apiErrors: {
+              openai: openaiError.message,
+              perplexity: perplexityError.message
+            }
+          })
+        };
+      }
     }
   } catch (error) {
     console.error('Function error:', error);
     console.error('Error stack:', error.stack);
     
-    // Provide a generic fallback response
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "I'm having trouble processing your message. Could you please try again or rephrase?",
-        error: error.message
+        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?",
+        error: error.message,
+        stack: error.stack
       })
     };
   }
 };
 
-async function callPerplexityAPI(messagesArray) {
-  const perplexityKey = process.env.PERPLEXITY_API_KEY;
-  
-  if (!perplexityKey) {
-    throw new Error('Missing Perplexity API key');
-  }
-  
-  const response = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${perplexityKey}`
-    },
-    body: JSON.stringify({
-      model: 'sonar-reasoning',
-      messages: messagesArray,
-      max_tokens: 150,
-      temperature: 0.7
-    })
-  });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
-  }
-  
-  const data = await response.json();
-  let aiResponse = data.choices[0].message.content;
-  
-  // Remove thinking sections if present
-  aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-  
-  return aiResponse;
-}
-
-async function callOpenAIAPI(userMessage, isLikelyEnglish, isLikelyTangkhul) {
+async function callOpenAIAPI(userMessage) {
   const openaiKey = process.env.OPENAI_API_KEY;
   
   if (!openaiKey) {
     throw new Error('Missing OpenAI API key');
   }
   
-  // Create prompt based on language detection
+  console.log('OpenAI API key present');
+  
+  // Detect language features
+  const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+  const normalizedMessage = userMessage.toLowerCase().trim();
+  const isGreeting = ['hi', 'hello', 'hey', 'greetings'].includes(normalizedMessage);
+  
+  // Customize prompt based on message content
   let prompt;
-  
-  if (isLikelyTangkhul) {
+  if (hasTangkhulChars) {
     prompt = `You are an AI assistant collecting Tangkhul language examples. The user has sent what appears to be a Tangkhul phrase: "${userMessage}". Ask them politely what it means in English.`;
-  } else if (isLikelyEnglish) {
-    prompt = `You are an AI assistant collecting Tangkhul language examples. The user has sent a message in English: "${userMessage}". Respond appropriately in English and ask ONE question to elicit Tangkhul language examples.`;
+  } else if (isGreeting) {
+    prompt = `You are an AI assistant collecting Tangkhul language examples. The user has greeted you with: "${userMessage}". Welcome them and ask them to share a Tangkhul phrase or word with you.`;
   } else {
-    prompt = `You are an AI assistant collecting Tangkhul language examples. Respond to this message: "${userMessage}". First determine if it's in English or Tangkhul, then respond appropriately. If it seems to be in Tangkhul, ask what it means. If it's in English, ask for a Tangkhul phrase related to the topic.`;
+    prompt = `You are an AI assistant collecting Tangkhul language examples. Respond to this message: "${userMessage}". If it seems to be in Tangkhul, ask what it means. If it's in English, ask for a Tangkhul phrase related to the topic.`;
   }
   
-  const response = await fetch('https://api.openai.com/v1/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo-instruct',
-      prompt: prompt,
-      max_tokens: 150,
-      temperature: 0.7
-    })
-  });
+  console.log('OpenAI prompt:', prompt);
   
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: "system",
+            content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time."
+          },
+          {
+            role: "user",
+            content: userMessage
+          }
+        ],
+        max_tokens: 150,
+        temperature: 0.7
+      })
+    });
+    
+    console.log('OpenAI response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('OpenAI response data:', JSON.stringify(data));
+    
+    return data.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('Error in OpenAI API call:', error);
+    throw error;
+  }
+}
+
+async function callPerplexityAPI(messages) {
+  const perplexityKey = process.env.PERPLEXITY_API_KEY;
+  
+  if (!perplexityKey) {
+    throw new Error('Missing Perplexity API key');
   }
   
-  const data = await response.json();
-  return data.choices[0].text.trim();
+  console.log('Perplexity API key present');
+  console.log('Perplexity messages:', JSON.stringify(messages));
+  
+  try {
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${perplexityKey}`
+      },
+      body: JSON.stringify({
+        model: 'sonar-small-chat',
+        messages: messages,
+        max_tokens: 150,
+        temperature: 0.7
+      })
+    });
+    
+    console.log('Perplexity response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Perplexity response data:', JSON.stringify(data));
+    
+    let aiResponse = data.choices[0].message.content;
+    
+    // Remove thinking sections if present
+    aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    
+    return aiResponse;
+  } catch (error) {
+    console.error('Error in Perplexity API call:', error);
+    throw error;
+  }
 }
