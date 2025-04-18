@@ -1,10 +1,12 @@
 const fetch = require('node-fetch');
 
+// Simple rate limiting map to track API calls
+const rateLimitMap = {
+  lastOpenAICall: 0,
+  lastPerplexityCall: 0
+};
+
 exports.handler = async function(event, context) {
-  console.log('=============== NEW REQUEST START ===============');
-  console.log('Has OpenAI key:', !!process.env.OPENAI_API_KEY);
-  console.log('Has Perplexity key:', !!process.env.PERPLEXITY_API_KEY);
-  
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -46,10 +48,7 @@ exports.handler = async function(event, context) {
       ];
     }
     
-    console.log('Extracted user message:', userMessage);
-    
     if (!userMessage) {
-      console.log('No message text could be extracted, using fallback');
       return {
         statusCode: 200,
         headers,
@@ -63,26 +62,10 @@ exports.handler = async function(event, context) {
     // Initial language detection for better handling
     const normalizedMessage = userMessage.toLowerCase().trim();
     
-    // Comprehensive list of common English words and phrases
-    const commonEnglishWords = [
-      'hi', 'hello', 'hey', 'yes', 'no', 'thanks', 'thank', 'you', 'okay', 'ok', 'sure', 
-      'good', 'bad', 'nice', 'great', 'cool', 'awesome', 'fine', 'well', 'alright', 'right',
-      'wrong', 'true', 'false', 'maybe', 'perhaps', 'definitely', 'certainly', 'exactly',
-      'how', 'what', 'when', 'where', 'why', 'who', 'which', 'whose', 'whom',
-      'is', 'are', 'am', 'was', 'were', 'be', 'being', 'been', 'have', 'has', 'had',
-      'do', 'does', 'did', 'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might',
-      'must', 'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'so'
-    ];
-    
-    // Check if it's a common English word or phrase
-    const isCommonEnglish = commonEnglishWords.includes(normalizedMessage) || 
-                           commonEnglishWords.includes(normalizedMessage.replace(/[.,?!]$/, ''));
-    
     // Special handling for "okay" and its variants
     const isOkay = ['okay', 'ok', 'k', 'kk', 'alright', 'alrighty', 'sure'].includes(normalizedMessage);
     
     if (isOkay) {
-      console.log('Using direct response for "okay" variant');
       return {
         statusCode: 200,
         headers,
@@ -93,39 +76,29 @@ exports.handler = async function(event, context) {
       };
     }
     
-    // Handle API calls with try-catch for each provider
+    // Try to call APIs with retries and proper rate limiting
     try {
-      console.log('Attempting OpenAI API call');
-      
-      if (!process.env.OPENAI_API_KEY) {
-        console.error('ERROR: Missing OpenAI API key');
-        throw new Error('Missing OpenAI API key');
-      }
-      
-      const aiResponse = await callOpenAIAPI(userMessage, isCommonEnglish);
-      console.log('OpenAI API call successful');
-      
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ 
-          response: aiResponse + "\n\n(OpenAI)",
-          provider: 'openai'
-        })
-      };
-    } catch (openaiError) {
-      console.error('OpenAI API error:', openaiError.message);
-      
-      // Try Perplexity as fallback
+      // First try Perplexity (switching the order since OpenAI has rate limit issues)
       try {
         console.log('Attempting Perplexity API call');
         
         if (!process.env.PERPLEXITY_API_KEY) {
-          console.error('ERROR: Missing Perplexity API key');
           throw new Error('Missing Perplexity API key');
         }
         
-        const perplexityResponse = await callPerplexityAPI(messagesArray, isCommonEnglish);
+        // Check rate limiting for Perplexity - ensure at least 2 seconds between calls
+        const now = Date.now();
+        const timeSinceLastCall = now - rateLimitMap.lastPerplexityCall;
+        
+        if (timeSinceLastCall < 2000) {
+          // Wait if needed to respect rate limits
+          await new Promise(resolve => setTimeout(resolve, 2000 - timeSinceLastCall));
+        }
+        
+        // Update last call time
+        rateLimitMap.lastPerplexityCall = Date.now();
+        
+        const perplexityResponse = await callPerplexityAPI(messagesArray);
         console.log('Perplexity API call successful');
         
         return {
@@ -139,50 +112,62 @@ exports.handler = async function(event, context) {
       } catch (perplexityError) {
         console.error('Perplexity API error:', perplexityError.message);
         
-        // If both APIs fail, provide a fallback response based on message content
-        // Simple language detection
-        const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+        // Try OpenAI as backup, with rate limiting
+        console.log('Attempting OpenAI API call');
         
-        let fallbackResponse;
-        if (hasTangkhulChars) {
-          fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
-        } else if (isCommonEnglish) {
-          fallbackResponse = "I'd like to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul?";
-        } else {
-          // Count how many English words are in the message
-          let englishWordCount = 0;
-          const messageWords = normalizedMessage.split(/\s+/);
-          
-          messageWords.forEach(word => {
-            const cleanWord = word.replace(/[.,?!;:'"()]/, '');
-            if (commonEnglishWords.includes(cleanWord)) {
-              englishWordCount++;
-            }
-          });
-          
-          // If multiple English words detected, treat as English
-          if (englishWordCount >= 2 || messageWords.length >= 4) {
-            fallbackResponse = "Thank you for sharing. Could you teach me how to say something similar in Tangkhul language?";
-          } else {
-            fallbackResponse = "Is that a Tangkhul word or phrase? Could you tell me what it means in English?";
-          }
+        if (!process.env.OPENAI_API_KEY) {
+          throw new Error('Missing OpenAI API key');
         }
+        
+        // Check rate limiting for OpenAI - ensure at least 3 seconds between calls
+        // (OpenAI has stricter rate limits)
+        const now = Date.now();
+        const timeSinceLastCall = now - rateLimitMap.lastOpenAICall;
+        
+        if (timeSinceLastCall < 3000) {
+          // Wait if needed to respect rate limits
+          await new Promise(resolve => setTimeout(resolve, 3000 - timeSinceLastCall));
+        }
+        
+        // Update last call time
+        rateLimitMap.lastOpenAICall = Date.now();
+        
+        const aiResponse = await callOpenAIAPI(userMessage);
+        console.log('OpenAI API call successful');
         
         return {
           statusCode: 200,
           headers,
           body: JSON.stringify({ 
-            response: fallbackResponse + "\n\n(Fallback System - API Errors: " + 
-                     "OpenAI: " + openaiError.message.substring(0, 50) + "..., " +
-                     "Perplexity: " + perplexityError.message.substring(0, 50) + "...)",
-            provider: 'fallback',
-            apiErrors: {
-              openai: openaiError.message,
-              perplexity: perplexityError.message
-            }
+            response: aiResponse + "\n\n(OpenAI)",
+            provider: 'openai'
           })
         };
       }
+    } catch (error) {
+      console.error('All API calls failed:', error.message);
+      
+      // If both APIs fail, provide a simple language-based response
+      const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+      let fallbackResponse;
+      
+      if (hasTangkhulChars) {
+        fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
+      } else if (['hi', 'hello', 'hey'].includes(normalizedMessage)) {
+        fallbackResponse = "Hello! I'm interested in learning Tangkhul language examples. Could you share a phrase in Tangkhul with me?";
+      } else {
+        fallbackResponse = "Thank you for your message. I'd love to learn some Tangkhul phrases. Could you share a word or expression?";
+      }
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          response: fallbackResponse + "\n\n(API Error - Please check your API keys)",
+          provider: 'fallback',
+          apiError: error.message
+        })
+      };
     }
   } catch (error) {
     console.error('Function error:', error.message);
@@ -191,21 +176,21 @@ exports.handler = async function(event, context) {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery - " + error.message.substring(0, 50) + "...)",
+        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery)",
         error: error.message
       })
     };
   }
 };
 
-async function callOpenAIAPI(userMessage, isLikelyEnglish) {
+async function callOpenAIAPI(userMessage) {
   const openaiKey = process.env.OPENAI_API_KEY;
   
   if (!openaiKey) {
     throw new Error('Missing OpenAI API key');
   }
   
-  // Detect language features
+  // Detect language features for customizing prompts
   const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
   const normalizedMessage = userMessage.toLowerCase().trim();
   const isGreeting = ['hi', 'hello', 'hey', 'greetings'].includes(normalizedMessage);
@@ -216,8 +201,6 @@ async function callOpenAIAPI(userMessage, isLikelyEnglish) {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has sent what appears to be a Tangkhul phrase. Ask them politely what it means in English.";
   } else if (isGreeting) {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has greeted you. Welcome them warmly and ask them to share a Tangkhul phrase or word with you.";
-  } else if (isLikelyEnglish) {
-    systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has sent a message in English. Respond appropriately and ask them to share a phrase or word in Tangkhul language.";
   } else {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. If the user message is in Tangkhul, ask what it means. If it's in English, ask for a Tangkhul phrase related to the topic.";
   }
@@ -234,122 +217,140 @@ async function callOpenAIAPI(userMessage, isLikelyEnglish) {
     }
   ];
   
+  // Use a more efficient model to reduce costs and rate limits
+  const model = "gpt-3.5-turbo-instruct";
+  
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openaiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: messages,
-        max_tokens: 500,  // Increased to 500 as requested
-        temperature: 0.7
-      })
-    });
+    // Implement retry logic with exponential backoff
+    let retries = 0;
+    const maxRetries = 2;
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
+    while (retries <= maxRetries) {
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openaiKey}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-3.5-turbo',
+            messages: messages,
+            max_tokens: 300,  // Reduced to save on tokens
+            temperature: 0.7
+          })
+        });
+        
+        if (response.status === 429) {
+          // Rate limit hit, apply exponential backoff
+          const waitTime = Math.pow(2, retries) * 1000;
+          console.log(`Rate limit hit, waiting ${waitTime}ms before retry`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries++;
+          continue;
+        }
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.choices || !data.choices.length || !data.choices[0].message) {
+          throw new Error('Unexpected response format from OpenAI API');
+        }
+        
+        return data.choices[0].message.content.trim();
+      } catch (error) {
+        if (retries >= maxRetries || error.message.includes('API key')) {
+          throw error;
+        }
+        retries++;
+      }
     }
-    
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices.length || !data.choices[0].message) {
-      throw new Error('Unexpected response format from OpenAI API');
-    }
-    
-    return data.choices[0].message.content.trim();
   } catch (error) {
     throw error;
   }
 }
 
-async function callPerplexityAPI(messages, isLikelyEnglish) {
+async function callPerplexityAPI(messages) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
   
   if (!perplexityKey) {
     throw new Error('Missing Perplexity API key');
   }
   
-  // Find if there's a user message and what it is
-  let userMessage = "";
-  const userMessages = messages.filter(msg => msg.role === "user");
-  if (userMessages.length > 0) {
-    userMessage = userMessages[userMessages.length - 1].content;
-  }
-  
-  // Find system message index
-  const systemIndex = messages.findIndex(msg => msg.role === "system");
-  
-  // If there's a system message, update it with language detection info
-  if (systemIndex >= 0 && userMessage) {
-    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-    
-    if (hasTangkhulChars) {
-      messages[systemIndex].content += " The user has sent what appears to be a Tangkhul phrase. Ask what it means in English.";
-    } else if (isLikelyEnglish) {
-      messages[systemIndex].content += " The user has sent a message in English. Ask them to share a phrase in Tangkhul.";
-    }
-  } else if (userMessage) {
-    // If no system message but we have a user message, add a system message
-    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-    let systemContent = "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time.";
-    
-    if (hasTangkhulChars) {
-      systemContent += " The user has sent what appears to be a Tangkhul phrase. Ask what it means in English.";
-    } else if (isLikelyEnglish) {
-      systemContent += " The user has sent a message in English. Ask them to share a phrase in Tangkhul.";
-    }
-    
-    messages.unshift({
-      role: "system",
-      content: systemContent
-    });
-  }
-  
-  // Ensure all messages have proper structure
-  const validMessages = messages.map(msg => ({
+  // Ensure messages are in the correct format
+  const formattedMessages = messages.map(msg => ({
     role: msg.role,
     content: msg.content
   }));
   
-  // Prepare request body with simplified format for Perplexity
+  // Ensure we have a system message
+  if (!formattedMessages.some(msg => msg.role === 'system')) {
+    formattedMessages.unshift({
+      role: 'system',
+      content: 'You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time.'
+    });
+  }
+  
+  // Simplified request for Perplexity - only using required parameters
   const requestBody = {
     model: "sonar",
-    messages: validMessages,
-    max_tokens: 500,  // Increased to 500 as requested
-    temperature: 0.7
+    messages: formattedMessages,
+    max_tokens: 300
   };
   
   try {
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${perplexityKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
+    // Implement retry logic with exponential backoff
+    let retries = 0;
+    const maxRetries = 2;
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
+    while (retries <= maxRetries) {
+      try {
+        const response = await fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${perplexityKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+        
+        if (response.status === 429) {
+          // Rate limit hit, apply exponential backoff
+          const waitTime = Math.pow(2, retries) * 1000;
+          console.log(`Rate limit hit, waiting ${waitTime}ms before retry`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries++;
+          continue;
+        }
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.choices || !data.choices.length || !data.choices[0].message) {
+          throw new Error('Unexpected response format from Perplexity API');
+        }
+        
+        let aiResponse = data.choices[0].message.content;
+        
+        // Remove thinking sections if present
+        aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        
+        return aiResponse;
+      } catch (error) {
+        if (retries >= maxRetries || error.message.includes('API key')) {
+          throw error;
+        }
+        retries++;
+      }
     }
-    
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices.length || !data.choices[0].message) {
-      throw new Error('Unexpected response format from Perplexity API');
-    }
-    
-    let aiResponse = data.choices[0].message.content;
-    
-    // Remove thinking sections if present
-    aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    
-    return aiResponse;
   } catch (error) {
     throw error;
   }
