@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, useCallback } from "react";
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./AuthContext";
 import { database } from "../services/firebase";
 import { ref, push, set, get, onValue } from "firebase/database";
@@ -15,35 +15,9 @@ export function ChatProvider({ children }) {
   const [messages, setMessages] = useState([]);
   const [conversationId, setConversationId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [apiProvider, setApiProvider] = useState("perplexity"); // or "chatgpt"
+  const [apiProvider, setApiProvider] = useState("chatgpt"); // Default to OpenAI for stability
 
-  // Use useCallback to prevent recreation of this function on each render
-  const createNewConversation = useCallback(async () => {
-    if (currentUser) {
-      const conversationsRef = ref(database, "conversations");
-      const newConversationRef = push(conversationsRef);
-      
-      await set(newConversationRef, {
-        startTime: Date.now(),
-        trainerId: currentUser.uid,
-        status: "active",
-        messageCount: 0
-      });
-      
-      // Set as active conversation
-      await set(ref(database, `trainers/${currentUser.uid}/activeConversation`), newConversationRef.key);
-      
-      setConversationId(newConversationRef.key);
-      setMessages([]);
-      
-      // Add AI welcome message
-      await sendAIMessage("Welcome to Tangkhul AI Trainer. How are you doing today?");
-      
-      setLoading(false);
-    }
-  }, [currentUser, sendAIMessage]); // Include sendAIMessage as a dependency
-
-  // Define sendAIMessage with useCallback
+  // Define sendAIMessage function
   const sendAIMessage = useCallback(async (text) => {
     if (!conversationId) return;
     
@@ -59,41 +33,43 @@ export function ChatProvider({ children }) {
     await set(newMessageRef, message);
   }, [conversationId]);
 
-  // Initialize or load conversation
-  useEffect(() => {
-    if (currentUser) {
-      const activeConversationRef = ref(database, `trainers/${currentUser.uid}/activeConversation`);
-      
-      get(activeConversationRef).then((snapshot) => {
-        if (snapshot.exists()) {
-          // Load existing conversation
-          const activeConvId = snapshot.val();
-          setConversationId(activeConvId);
-          
-          // Load messages
-          const messagesRef = ref(database, `conversations/${activeConvId}/messages`);
-          onValue(messagesRef, (messagesSnapshot) => {
-            const messageList = [];
-            messagesSnapshot.forEach((childSnapshot) => {
-              messageList.push({
-                id: childSnapshot.key,
-                ...childSnapshot.val()
-              });
-            });
-            setMessages(messageList);
-            setLoading(false);
-          });
-        } else {
-          // Create new conversation
-          createNewConversation();
-        }
-      });
-    }
-  }, [currentUser, createNewConversation]); // Add createNewConversation to the dependency array
+  // Define createNewConversation function with proper dependencies
+  const createNewConversation = useCallback(async () => {
+    if (!currentUser) return;
+    
+    const conversationsRef = ref(database, "conversations");
+    const newConversationRef = push(conversationsRef);
+    
+    await set(newConversationRef, {
+      startTime: Date.now(),
+      trainerId: currentUser.uid,
+      status: "active",
+      messageCount: 0
+    });
+    
+    // Set as active conversation
+    await set(ref(database, `trainers/${currentUser.uid}/activeConversation`), newConversationRef.key);
+    
+    const newConversationId = newConversationRef.key;
+    setConversationId(newConversationId);
+    setMessages([]);
+    
+    // Add AI welcome message
+    const messagesRef = ref(database, `conversations/${newConversationId}/messages`);
+    const newMessageRef = push(messagesRef);
+    
+    await set(newMessageRef, {
+      sender: "ai",
+      text: "Welcome to Tangkhul AI Trainer. How are you doing today?",
+      timestamp: Date.now()
+    });
+    
+    setLoading(false);
+  }, [currentUser]);
 
-  async function processMessageForExamples(text) {
-    // This is a simplified detection logic
-    // In a real implementation, this would be more sophisticated
+  // Process messages for potential language examples
+  const processMessageForExamples = useCallback(async (text) => {
+    if (!currentUser || !conversationId) return;
     
     // Check for potential Tangkhul examples (contains special characters)
     const hasTangkhulChars = /[ĀāA̲a̲]/.test(text);
@@ -102,7 +78,7 @@ export function ChatProvider({ children }) {
       // Extract Tangkhul examples (simplified)
       const example = {
         tangkhulText: text,
-        englishTranslation: "", // This would need to be determined from context
+        englishTranslation: "",
         category: "detected",
         context: "conversation"
       };
@@ -112,10 +88,16 @@ export function ChatProvider({ children }) {
       // Update knowledge profile
       await updateTrainerKnowledgeProfile(currentUser.uid, "general", 0.7);
     }
-  }
+  }, [currentUser, conversationId]);
 
-  async function generateAIResponse(trainerMessage) {
+  // Generate AI response
+  const generateAIResponse = useCallback(async (trainerMessage) => {
+    if (!conversationId) return;
+    
     try {
+      // Limit conversation context to prevent overload
+      const recentMessages = messages.slice(-5);
+      
       // Call the serverless function to get AI response
       const response = await fetch('/api/ai-proxy', {
         method: 'POST',
@@ -126,9 +108,9 @@ export function ChatProvider({ children }) {
           messages: [
             {
               role: "system",
-              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Follow these guidelines: 1) Use only English in your responses. 2) Ask only ONE question at a time. 3) Format your responses with clear paragraphs and proper spacing. 4) Focus on eliciting specific Tangkhul language examples, grammar clarifications, or vocabulary. 5) Keep your responses concise and focused. 6) Maintain a professional, formal tone appropriate for language instruction."
+              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Follow these guidelines: 1) Use only English in your responses. 2) Ask only ONE question at a time. 3) Format your responses with clear paragraphs and proper spacing. 4) Focus on eliciting specific Tangkhul language examples, grammar clarifications, or vocabulary. 5) Keep your responses concise and focused."
             },
-            ...messages.map(msg => ({
+            ...recentMessages.map(msg => ({
               role: msg.sender === "trainer" ? "user" : "assistant",
               content: msg.text
             })),
@@ -149,20 +131,13 @@ export function ChatProvider({ children }) {
         // Fallback message if API call fails
         await sendAIMessage("I'm sorry, I couldn't process that. Could you please try again?");
       }
-      
-      // Check if we need to switch API providers
-      const usageRef = ref(database, "apiUsage/perplexity");
-      const usageSnapshot = await get(usageRef);
-      
-      if (usageSnapshot.exists() && usageSnapshot.val() > 5.0) {
-        setApiProvider("chatgpt");
-      }
     } catch (error) {
       console.error("Error generating AI response:", error);
       await sendAIMessage("I'm experiencing some technical difficulties. Please try again later.");
     }
-  }
+  }, [conversationId, messages, apiProvider, sendAIMessage]);
 
+  // Send trainer message
   const sendTrainerMessage = useCallback(async (text) => {
     if (!conversationId) return;
     
@@ -183,6 +158,41 @@ export function ChatProvider({ children }) {
     // Generate AI response
     await generateAIResponse(text);
   }, [conversationId, processMessageForExamples, generateAIResponse]);
+
+  // Initialize or load conversation
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    const activeConversationRef = ref(database, `trainers/${currentUser.uid}/activeConversation`);
+    
+    get(activeConversationRef).then((snapshot) => {
+      if (snapshot.exists()) {
+        // Load existing conversation
+        const activeConvId = snapshot.val();
+        setConversationId(activeConvId);
+        
+        // Load messages
+        const messagesRef = ref(database, `conversations/${activeConvId}/messages`);
+        onValue(messagesRef, (messagesSnapshot) => {
+          const messageList = [];
+          messagesSnapshot.forEach((childSnapshot) => {
+            messageList.push({
+              id: childSnapshot.key,
+              ...childSnapshot.val()
+            });
+          });
+          setMessages(messageList);
+          setLoading(false);
+        });
+      } else {
+        // Create new conversation
+        createNewConversation();
+      }
+    }).catch(error => {
+      console.error("Error checking active conversation:", error);
+      setLoading(false);
+    });
+  }, [currentUser, createNewConversation]);
 
   const value = {
     messages,
