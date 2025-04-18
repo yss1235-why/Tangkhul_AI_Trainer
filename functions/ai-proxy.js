@@ -1,7 +1,6 @@
 const fetch = require('node-fetch');
 
 // Store conversation histories in memory (will reset on function restart)
-// In production, you'd use a persistent store like Firebase, DynamoDB, etc.
 const conversationHistories = {};
 
 exports.handler = async function(event, context) {
@@ -24,7 +23,7 @@ exports.handler = async function(event, context) {
     
     // Extract message data and conversation ID
     let userMessage = "";
-    let conversationId = requestBody.conversationId || "default";
+    let conversationId = requestBody.conversationId || "default-" + Date.now();
     
     console.log('Conversation ID:', conversationId);
     
@@ -46,7 +45,50 @@ exports.handler = async function(event, context) {
         headers,
         body: JSON.stringify({ 
           response: "I'd like to learn some Tangkhul phrases. Could you share a word or sentence in Tangkhul with me?\n\n(Fallback System)",
-          provider: 'fallback'
+          provider: 'fallback',
+          conversationId: conversationId
+        })
+      };
+    }
+    
+    // Initial language detection for better handling
+    const normalizedMessage = userMessage.toLowerCase().trim();
+    
+    // Special handling for common English phrases
+    const commonEnglishPhrases = {
+      'hi': "Hi there! I'm collecting examples of Tangkhul language. Could you teach me a word or phrase in Tangkhul?",
+      'hello': "Hello! I'd love to learn some Tangkhul words or phrases. Could you share one with me?",
+      'hey': "Hey! I'm interested in learning Tangkhul language. Could you share a common greeting or phrase?",
+      'okay': "Great! I'd love to learn a Tangkhul word or phrase. What would you like to teach me?",
+      'ok': "Wonderful! Could you share a Tangkhul word or phrase with me?",
+      'sure': "Thanks! I'm excited to learn. What Tangkhul word or phrase would you like to share?",
+      'yes': "Great! What Tangkhul word or phrase would you like to teach me today?"
+    };
+    
+    // Check if message is a common English phrase that needs a direct response
+    if (commonEnglishPhrases[normalizedMessage]) {
+      const response = commonEnglishPhrases[normalizedMessage];
+      
+      // For direct responses, still maintain conversation history
+      if (!conversationHistories[conversationId]) {
+        conversationHistories[conversationId] = [
+          createSystemMessage()
+        ];
+      }
+      
+      // Add user message and assistant response to history
+      conversationHistories[conversationId].push(
+        { role: "user", content: userMessage },
+        { role: "assistant", content: response }
+      );
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          response: response + "\n\n(Direct Response)",
+          provider: 'direct',
+          conversationId: conversationId
         })
       };
     }
@@ -55,10 +97,7 @@ exports.handler = async function(event, context) {
     if (!conversationHistories[conversationId]) {
       console.log('Creating new conversation history');
       conversationHistories[conversationId] = [
-        {
-          role: "system",
-          content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Keep responses concise and focused on collecting Tangkhul language examples."
-        }
+        createSystemMessage()
       ];
     }
     
@@ -69,32 +108,6 @@ exports.handler = async function(event, context) {
     });
     
     console.log('Current conversation history:', JSON.stringify(conversationHistories[conversationId]));
-    
-    // Initial language detection for better handling
-    const normalizedMessage = userMessage.toLowerCase().trim();
-    
-    // Special handling for "okay" and its variants
-    const isOkay = ['okay', 'ok', 'k', 'kk', 'alright', 'alrighty', 'sure'].includes(normalizedMessage);
-    
-    if (isOkay) {
-      const response = "Great! I'd love to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul language?\n\n(Direct Response)";
-      
-      // Add assistant response to history
-      conversationHistories[conversationId].push({
-        role: "assistant",
-        content: response.split('\n\n')[0] // Store without the provider tag
-      });
-      
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ 
-          response: response,
-          provider: 'direct',
-          conversationId: conversationId
-        })
-      };
-    }
     
     // Try Perplexity with the full conversation history
     try {
@@ -172,6 +185,26 @@ exports.handler = async function(event, context) {
   }
 };
 
+// Create a clear, conversational system message
+function createSystemMessage() {
+  return {
+    role: "system",
+    content: `You are a conversational AI assistant designed to collect Tangkhul language examples. Your purpose is to engage users in a friendly conversation and encourage them to share Tangkhul words and phrases.
+
+IMPORTANT INSTRUCTIONS:
+1. Maintain a casual, friendly tone like a language learning partner
+2. Do NOT give educational explanations of English words
+3. Always respond conversationally, not academically
+4. Keep responses short (1-3 sentences)
+5. Always end with a simple question asking for Tangkhul language examples
+6. If the user shares a Tangkhul word/phrase, ask what it means in English
+7. If the user shares a meaning in English, thank them and ask for another phrase
+8. NEVER explain what English greetings like "hi" or "hello" mean
+
+Remember that you are in a conversation to collect Tangkhul language examples, not to provide information or education.`
+  };
+}
+
 // Function to ensure messages follow the required alternating pattern
 function validateMessageSequence(messages) {
   // Clone the messages to avoid modifying the original
@@ -248,7 +281,7 @@ async function callPerplexityAPI(messages) {
     temperature: 0.7
   };
   
-  console.log('Sending request to Perplexity:', JSON.stringify(requestBody));
+  console.log('Sending request to Perplexity');
   
   try {
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
