@@ -41,7 +41,7 @@ export function ChatProvider({ children }) {
       
       setLoading(false);
     }
-  }, [currentUser]); // Include sendAIMessage as a dependency once we define it
+  }, [currentUser, sendAIMessage]); // Include sendAIMessage as a dependency
 
   // Define sendAIMessage with useCallback
   const sendAIMessage = useCallback(async (text) => {
@@ -58,12 +58,6 @@ export function ChatProvider({ children }) {
     
     await set(newMessageRef, message);
   }, [conversationId]);
-
-  // Update the createNewConversation to include sendAIMessage
-  useEffect(() => {
-    // Update the reference to sendAIMessage
-    createNewConversation.sendAIMessage = sendAIMessage;
-  }, [createNewConversation, sendAIMessage]);
 
   // Initialize or load conversation
   useEffect(() => {
@@ -132,7 +126,7 @@ export function ChatProvider({ children }) {
           messages: [
             {
               role: "system",
-              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Use only English in your responses. Ask questions that prompt Tangkhul language responses, seek clarification about grammar, and engage in natural conversation."
+              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Follow these guidelines: 1) Use only English in your responses. 2) Ask only ONE question at a time. 3) Format your responses with clear paragraphs and proper spacing. 4) Focus on eliciting specific Tangkhul language examples, grammar clarifications, or vocabulary. 5) Keep your responses concise and focused. 6) Maintain a professional, formal tone appropriate for language instruction."
             },
             ...messages.map(msg => ({
               role: msg.sender === "trainer" ? "user" : "assistant",
@@ -188,7 +182,7 @@ export function ChatProvider({ children }) {
     
     // Generate AI response
     await generateAIResponse(text);
-  }, [conversationId]);
+  }, [conversationId, processMessageForExamples, generateAIResponse]);
 
   const value = {
     messages,
