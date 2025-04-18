@@ -16,6 +16,7 @@ export function ChatProvider({ children }) {
   const [conversationId, setConversationId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [apiProvider, setApiProvider] = useState("chatgpt"); // Default to OpenAI for stability
+  const [apiConversationId, setApiConversationId] = useState(null); // Track API conversation ID
 
   // Define sendAIMessage function
   const sendAIMessage = useCallback(async (text) => {
@@ -52,6 +53,10 @@ export function ChatProvider({ children }) {
     
     const newConversationId = newConversationRef.key;
     setConversationId(newConversationId);
+    
+    // Reset API conversation ID for the new conversation
+    setApiConversationId(null);
+    
     setMessages([]);
     
     // Add AI welcome message
@@ -119,14 +124,22 @@ export function ChatProvider({ children }) {
               content: trainerMessage
             }
           ],
-          apiProvider
+          apiProvider,
+          conversationId: apiConversationId // Pass the API conversation ID
         }),
       });
 
       const data = await response.json();
       
+      // If response includes a conversation ID, save it for future requests
+      if (data.conversationId) {
+        setApiConversationId(data.conversationId);
+      }
+      
       if (data.response) {
-        await sendAIMessage(data.response);
+        // Remove the provider indication (e.g., "(OpenAI)" or "(Perplexity)") before storing
+        const cleanedResponse = data.response.replace(/\n\n\([^)]+\)$/, '');
+        await sendAIMessage(cleanedResponse);
       } else {
         // Fallback message if API call fails
         await sendAIMessage("I'm sorry, I couldn't process that. Could you please try again?");
@@ -135,7 +148,7 @@ export function ChatProvider({ children }) {
       console.error("Error generating AI response:", error);
       await sendAIMessage("I'm experiencing some technical difficulties. Please try again later.");
     }
-  }, [conversationId, messages, apiProvider, sendAIMessage]);
+  }, [conversationId, messages, apiProvider, apiConversationId, sendAIMessage]);
 
   // Send trainer message
   const sendTrainerMessage = useCallback(async (text) => {
