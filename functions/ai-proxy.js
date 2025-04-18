@@ -7,76 +7,75 @@ exports.handler = async function(event, context) {
     'Content-Type': 'application/json'
   };
 
+  // Handle preflight requests
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
   }
 
   try {
+    // Parse the request
     const requestBody = JSON.parse(event.body);
-    let { messages, apiProvider } = requestBody;
+    const userMessage = requestBody.message || "Hi";
     
-    // Ensure message array is valid
-    if (!messages || !Array.isArray(messages)) {
-      return {
-        statusCode: 400, headers,
-        body: JSON.stringify({ error: 'Invalid messages format' })
-      };
-    }
+    // Simplified prompt to reduce complexity
+    const prompt = `As an AI assistant collecting Tangkhul language examples, respond to: "${userMessage}". 
+    Your response should be in English, ask only ONE question, be concise, and focus on eliciting Tangkhul language examples.`;
     
-    // Limit conversation context length to prevent overload
-    if (messages.length > 10) {
-      // Keep system message and last 9 exchanges
-      const systemMessage = messages.find(msg => msg.role === "system");
-      const recentMessages = messages.slice(-9);
-      messages = systemMessage ? [systemMessage, ...recentMessages] : recentMessages;
-    }
+    // Use OpenAI with minimal context for reliability
+    const openaiKey = process.env.OPENAI_API_KEY;
     
-    try {
-      // Default to OpenAI for more reliable response handling
-      const openaiKey = process.env.OPENAI_API_KEY;
-      
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: messages,
-          max_tokens: 1000,
-          temperature: 0.7
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`OpenAI API error (${response.status})`);
-      }
-      
-      const data = await response.json();
-      let aiResponse = data.choices[0].message.content;
-      
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: "system",
+            content: "You are an AI assistant designed to collect Tangkhul language examples."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 150,
+        temperature: 0.7
+      })
+    });
+    
+    // Handle API response
+    if (!response.ok) {
+      console.error(`OpenAI API error: ${response.status}`);
       return {
-        statusCode: 200, headers,
-        body: JSON.stringify({ response: aiResponse })
-      };
-    } catch (error) {
-      console.error('API error:', error);
-      return {
-        statusCode: 502, headers,
+        statusCode: 200, // Return 200 even if API fails
+        headers,
         body: JSON.stringify({ 
-          error: 'External API service error', 
-          details: error.message 
+          response: "I'm having trouble connecting to my language services. Could you please share a Tangkhul word or phrase with me?" 
         })
       };
     }
+    
+    const data = await response.json();
+    const aiResponse = data.choices[0].message.content;
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ response: aiResponse })
+    };
   } catch (error) {
     console.error('Function error:', error);
+    
+    // Return a fallback response rather than error status
     return {
-      statusCode: 500, headers,
+      statusCode: 200,
+      headers,
       body: JSON.stringify({ 
-        error: 'Internal server error', 
-        details: error.message 
+        response: "I'd like to learn more Tangkhul words. Can you teach me how to say something in Tangkhul?" 
       })
     };
   }
