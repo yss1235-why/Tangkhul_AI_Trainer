@@ -86,6 +86,41 @@ exports.handler = async function(event, context) {
       'sure': getRandomTranslationPrompt("general"),
       'yes': getRandomTranslationPrompt("general")
     };
+
+    // Check if the message might be incomplete
+    if (isLikelyIncompleteMessage(normalizedMessage)) {
+      console.log('Detected likely incomplete message:', normalizedMessage);
+      
+      // Add to conversation history
+      if (!conversationHistories[conversationId]) {
+        conversationHistories[conversationId] = [
+          createSystemMessage()
+        ];
+      }
+      
+      // Add user message to history
+      conversationHistories[conversationId].push(
+        { role: "user", content: userMessage }
+      );
+      
+      // Generate a clarification response
+      const clarificationResponse = getClarificationResponse(userMessage, conversationHistories[conversationId]);
+      
+      // Add assistant response to history
+      conversationHistories[conversationId].push(
+        { role: "assistant", content: clarificationResponse }
+      );
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          response: clarificationResponse + "\n\n(Clarification)",
+          provider: 'direct',
+          conversationId: conversationId
+        })
+      };
+    }
     
     // Check if message is a common English phrase that needs a direct response
     if (commonEnglishPhrases[normalizedMessage]) {
@@ -211,6 +246,76 @@ exports.handler = async function(event, context) {
   }
 };
 
+// Function to detect likely incomplete messages
+function isLikelyIncompleteMessage(message) {
+  // Very short messages (1-2 words)
+  const wordCount = message.split(/\s+/).length;
+  
+  // Common sentence starters that indicate more should be coming
+  const commonStarters = ["we", "i", "they", "you", "he", "she", "it", "the", "this", "these", "those"];
+  
+  // Common filler words that suggest an incomplete thought
+  const fillerWords = ["like", "so", "just", "very", "really", "basically", "actually"];
+  
+  // Check for messages that end with these words, suggesting more is coming
+  const incompleteEndings = [...commonStarters, ...fillerWords, "and", "or", "but", "with", "for", "to", "by", "on", "in", "at", "from", "that", "use"];
+  
+  // Does the message end with a common incomplete ending?
+  const lastWord = message.split(/\s+/).pop().replace(/[.,?!;:'"()]/, '');
+  const endsWithIncompleteWord = incompleteEndings.includes(lastWord);
+  
+  // Missing ending punctuation for longer phrases
+  const hasPunctuation = /[.?!]$/.test(message);
+  const missingPunctuation = !hasPunctuation && wordCount > 1;
+  
+  // Does the message look like a partial sentence?
+  return (wordCount <= 3 && endsWithIncompleteWord) || 
+         (missingPunctuation && endsWithIncompleteWord) ||
+         (message === "we use" || message === "we use." || message === "we used" || message === "we used.");
+}
+
+// Function to generate clarification responses
+function getClarificationResponse(userMessage, conversationHistory) {
+  // Get the most recent AI message (to understand context)
+  const assistantMessages = conversationHistory.filter(msg => msg.role === "assistant");
+  const lastAssistantMessage = assistantMessages.length > 0 ? 
+    assistantMessages[assistantMessages.length - 1].content : "";
+  
+  // Reference the last question asked
+  let clarificationResponses = [];
+  
+  // If the last message was asking about greetings
+  if (lastAssistantMessage.toLowerCase().includes("greet") || 
+      lastAssistantMessage.toLowerCase().includes("hello")) {
+    clarificationResponses = [
+      "Could you please share the complete greeting in Tangkhul language?",
+      "I'd love to hear how people greet each other in Tangkhul. Could you share the complete phrase?",
+      "What greeting words or phrases do people use in Tangkhul? Could you share the full expression?"
+    ];
+  } 
+  // Generic clarifications based on user's partial response
+  else {
+    const lowercaseMessage = userMessage.toLowerCase().trim();
+    
+    if (lowercaseMessage.startsWith("we use") || lowercaseMessage === "we use" || lowercaseMessage === "we use.") {
+      clarificationResponses = [
+        "What exactly do you use in Tangkhul? Could you complete your thought?",
+        "What phrase or word do you use? I'd love to learn the complete Tangkhul expression.",
+        "Could you share the complete expression that you use in Tangkhul?"
+      ];
+    } else {
+      clarificationResponses = [
+        "Could you please complete your thought? I'm interested in learning the full phrase.",
+        "I think your message might be incomplete. Could you share the complete thought or phrase?",
+        "I'd like to hear more about what you were going to say. Could you share the complete phrase or thought?"
+      ];
+    }
+  }
+  
+  // Return a random clarification response
+  return clarificationResponses[Math.floor(Math.random() * clarificationResponses.length)];
+}
+
 // Function to get a random translation prompt based on category
 function getRandomTranslationPrompt(category) {
   // Greeting category prompts
@@ -260,8 +365,10 @@ IMPORTANT INSTRUCTIONS:
 6. If the user shares a meaning in English, thank them and ask for another specific translation
 7. Move through different topics: greetings, food, family, nature, emotions, etc.
 8. Ask one specific translation question at a time
+9. Be alert for incomplete messages or sentences and ask for clarification
+10. If a user message seems cut off, ask them to complete their thought rather than interpreting literally
 
-Your goal is to collect precise vocabulary and phrases in Tangkhul through directed translation questions.`
+Your goal is to collect precise vocabulary and phrases in Tangkhul through directed translation questions, while handling communication challenges gracefully.`
   };
 }
 
