@@ -108,7 +108,7 @@ export function ChatProvider({ children }) {
           messages: [
             {
               role: "system",
-              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Follow these guidelines: 1) Use only English in your responses. 2) Ask only ONE question at a time. 3) Format your responses with clear paragraphs and proper spacing. 4) Focus on eliciting specific Tangkhul language examples, grammar clarifications, or vocabulary. 5) Keep your responses concise and focused."
+              content: "You are an AI assistant designed to collect Tangkhul language examples from human trainers. Follow these guidelines: 1) Use only English in your responses. 2) Ask only ONE question at a time. 3) Format your responses with clear paragraphs and proper spacing. 4) Focus on eliciting specific Tangkhul language examples, grammar clarifications, or vocabulary. 5) Keep your responses concise and focused. 6) IMPORTANT: If the user message is in English (like 'hi', 'hello', etc.), respond appropriately in English. Only ask for translations when the message contains Tangkhul text."
             },
             ...recentMessages.map(msg => ({
               role: msg.sender === "trainer" ? "user" : "assistant",
