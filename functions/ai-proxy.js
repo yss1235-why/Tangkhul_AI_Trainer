@@ -14,43 +14,48 @@ exports.handler = async function(event, context) {
   console.log('Request received');
 
   try {
+    // Parse the incoming request body
     const requestBody = JSON.parse(event.body);
     
-    // Extract the user message from the messages array structure
-    let userMessage = "";
+    // Log the full structure for debugging
+    console.log('Request body structure:', JSON.stringify(requestBody));
     
-    if (requestBody.message) {
-      // If message is sent directly (simple format)
-      userMessage = requestBody.message;
-    } else if (requestBody.messages && Array.isArray(requestBody.messages)) {
-      // If messages array is provided (chat format)
-      // Find the last user message in the array
-      const userMessages = requestBody.messages.filter(msg => msg.role === "user");
-      if (userMessages.length > 0) {
-        userMessage = userMessages[userMessages.length - 1].content;
-      }
-    }
+    // Extract information correctly based on how ChatContext.js sends it
+    const messagesArray = requestBody.messages || [];
+    const apiProvider = requestBody.apiProvider || 'chatgpt';
     
-    console.log('Processed user message:', userMessage);
-    
-    if (!userMessage) {
+    if (!messagesArray.length) {
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({
-          response: "I couldn't understand your message. Could you please try again?",
-          error: "No user message found"
+          response: "I couldn't process your message. Please try again.",
+          error: "No messages provided"
         })
       };
     }
     
-    // Simple language detection
-    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+    // Get the most recent user message
+    const userMessages = messagesArray.filter(msg => msg.role === "user");
+    const latestUserMessage = userMessages.length ? userMessages[userMessages.length - 1].content : "";
+    
+    console.log('Latest user message:', latestUserMessage);
+    
+    if (!latestUserMessage) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          response: "I couldn't understand your last message. Could you please try again?",
+          error: "Empty user message"
+        })
+      };
+    }
     
     // Try Perplexity first (primary service)
     try {
-      console.log('Attempting Perplexity API call');
-      const perplexityResponse = await callPerplexityAPI(userMessage, requestBody.messages);
+      console.log('Attempting Perplexity API call with messages array');
+      const perplexityResponse = await callPerplexityAPI(messagesArray);
       console.log('Perplexity API call successful');
       
       return {
@@ -62,11 +67,12 @@ exports.handler = async function(event, context) {
         })
       };
     } catch (perplexityError) {
-      // Log the error and fall back to OpenAI
+      // Log the full error for debugging
       console.error('Perplexity API error:', perplexityError);
       console.log('Falling back to OpenAI API');
       
-      const openaiResponse = await callOpenAIAPI(userMessage);
+      // Only pass the latest user message to OpenAI as fallback
+      const openaiResponse = await callOpenAIAPI(latestUserMessage);
       
       return {
         statusCode: 200,
@@ -79,7 +85,9 @@ exports.handler = async function(event, context) {
       };
     }
   } catch (error) {
+    // Detailed error logging
     console.error('Function error:', error);
+    console.error('Error stack:', error.stack);
     
     return {
       statusCode: 200,
@@ -92,31 +100,15 @@ exports.handler = async function(event, context) {
   }
 };
 
-async function callPerplexityAPI(userMessage, previousMessages = []) {
+async function callPerplexityAPI(messagesArray) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
   
   if (!perplexityKey) {
     throw new Error('Missing Perplexity API key');
   }
   
-  // Prepare messages array for API call
-  let messages = [
-    {
-      role: "system",
-      content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples. Important: Determine if the user's message is in English or Tangkhul before responding. If it's in English, respond appropriately without asking for a translation. Tangkhul language typically contains special characters like macrons (ā, Ā) and underlines (a̲, A̲)."
-    }
-  ];
-  
-  // If previous messages array is provided, use it
-  if (Array.isArray(previousMessages) && previousMessages.length > 0) {
-    messages = previousMessages;
-  } else {
-    // Otherwise just add the user message
-    messages.push({
-      role: "user",
-      content: userMessage
-    });
-  }
+  // Log the messages we're sending to Perplexity
+  console.log('Sending to Perplexity:', JSON.stringify(messagesArray));
   
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
@@ -126,17 +118,22 @@ async function callPerplexityAPI(userMessage, previousMessages = []) {
     },
     body: JSON.stringify({
       model: 'sonar-reasoning',
-      messages: messages,
+      messages: messagesArray,
       max_tokens: 150,
       temperature: 0.7
     })
   });
   
   if (!response.ok) {
-    throw new Error(`Perplexity API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`Perplexity API error: ${response.status}, ${errorText}`);
   }
   
   const data = await response.json();
+  
+  // Log the response for debugging
+  console.log('Perplexity response:', JSON.stringify(data));
+  
   let aiResponse = data.choices[0].message.content;
   
   // Remove thinking sections if present
@@ -158,6 +155,8 @@ async function callOpenAIAPI(userMessage) {
     ? `You are an AI assistant collecting Tangkhul language examples. The user has sent what appears to be a Tangkhul phrase: "${userMessage}". Ask them politely what it means in English.`
     : `You are an AI assistant collecting Tangkhul language examples. The user has sent a message in English: "${userMessage}". Respond appropriately in English and ask ONE question to elicit Tangkhul language examples.`;
   
+  console.log('OpenAI prompt:', prompt);
+  
   const response = await fetch('https://api.openai.com/v1/completions', {
     method: 'POST',
     headers: {
@@ -173,7 +172,8 @@ async function callOpenAIAPI(userMessage) {
   });
   
   if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`OpenAI API error: ${response.status}, ${errorText}`);
   }
   
   const data = await response.json();
