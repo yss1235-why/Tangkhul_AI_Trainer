@@ -54,8 +54,42 @@ exports.handler = async function(event, context) {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: "I'd like to learn some Tangkhul phrases. Could you share a word or sentence in Tangkhul with me?",
+          response: "I'd like to learn some Tangkhul phrases. Could you share a word or sentence in Tangkhul with me?\n\n(Fallback System)",
           provider: 'fallback'
+        })
+      };
+    }
+    
+    // Initial language detection for better handling
+    const normalizedMessage = userMessage.toLowerCase().trim();
+    
+    // Comprehensive list of common English words and phrases
+    const commonEnglishWords = [
+      'hi', 'hello', 'hey', 'yes', 'no', 'thanks', 'thank', 'you', 'okay', 'ok', 'sure', 
+      'good', 'bad', 'nice', 'great', 'cool', 'awesome', 'fine', 'well', 'alright', 'right',
+      'wrong', 'true', 'false', 'maybe', 'perhaps', 'definitely', 'certainly', 'exactly',
+      'how', 'what', 'when', 'where', 'why', 'who', 'which', 'whose', 'whom',
+      'is', 'are', 'am', 'was', 'were', 'be', 'being', 'been', 'have', 'has', 'had',
+      'do', 'does', 'did', 'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might',
+      'must', 'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'so'
+    ];
+    
+    // Check if it's a common English word or phrase
+    const isCommonEnglish = commonEnglishWords.includes(normalizedMessage) || 
+                           commonEnglishWords.includes(normalizedMessage.replace(/[.,?!]$/, ''));
+    
+    // Special handling for "okay" and its variants
+    const isOkay = ['okay', 'ok', 'k', 'kk', 'alright', 'alrighty', 'sure'].includes(normalizedMessage);
+    
+    if (isOkay) {
+      console.log('Detected "okay" or variant, treating as English');
+      // Don't even try APIs for simple okay, use direct response
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          response: "Great! I'd love to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul language?\n\n(Direct Response)",
+          provider: 'direct'
         })
       };
     }
@@ -63,14 +97,14 @@ exports.handler = async function(event, context) {
     // Handle API calls with try-catch for each provider
     try {
       console.log('Attempting OpenAI API call');
-      const aiResponse = await callOpenAIAPI(userMessage);
+      const aiResponse = await callOpenAIAPI(userMessage, isCommonEnglish);
       console.log('OpenAI API call successful');
       
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: aiResponse,
+          response: aiResponse + "\n\n(OpenAI)",
           provider: 'openai'
         })
       };
@@ -80,14 +114,14 @@ exports.handler = async function(event, context) {
       // Try Perplexity as fallback
       try {
         console.log('Attempting Perplexity API call');
-        const perplexityResponse = await callPerplexityAPI(messagesArray);
+        const perplexityResponse = await callPerplexityAPI(messagesArray, isCommonEnglish);
         console.log('Perplexity API call successful');
         
         return {
           statusCode: 200,
           headers,
           body: JSON.stringify({ 
-            response: perplexityResponse,
+            response: perplexityResponse + "\n\n(Perplexity)",
             provider: 'perplexity'
           })
         };
@@ -95,27 +129,39 @@ exports.handler = async function(event, context) {
         console.error('Perplexity API error:', perplexityError);
         
         // If both APIs fail, provide a fallback response based on message content
-        const normalizedMessage = userMessage.toLowerCase().trim();
-        
         // Simple language detection
         const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-        const commonEnglishWords = ['hi', 'hello', 'hey', 'yes', 'no', 'thanks', 'how', 'what', 'when', 'where', 'why'];
-        const isSimpleEnglish = commonEnglishWords.some(word => normalizedMessage === word || normalizedMessage.startsWith(word + ' '));
         
         let fallbackResponse;
         if (hasTangkhulChars) {
           fallbackResponse = "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?";
-        } else if (isSimpleEnglish) {
+        } else if (isCommonEnglish) {
           fallbackResponse = "I'd like to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul?";
         } else {
-          fallbackResponse = "Thank you for your message. Could you share a phrase or word in Tangkhul with me?";
+          // Count how many English words are in the message
+          let englishWordCount = 0;
+          const messageWords = normalizedMessage.split(/\s+/);
+          
+          messageWords.forEach(word => {
+            const cleanWord = word.replace(/[.,?!;:'"()]/, '');
+            if (commonEnglishWords.includes(cleanWord)) {
+              englishWordCount++;
+            }
+          });
+          
+          // If multiple English words detected, treat as English
+          if (englishWordCount >= 2 || messageWords.length >= 4) {
+            fallbackResponse = "Thank you for sharing. Could you teach me how to say something similar in Tangkhul language?";
+          } else {
+            fallbackResponse = "Is that a Tangkhul word or phrase? Could you tell me what it means in English?";
+          }
         }
         
         return {
           statusCode: 200,
           headers,
           body: JSON.stringify({ 
-            response: fallbackResponse,
+            response: fallbackResponse + "\n\n(Fallback System)",
             provider: 'fallback',
             apiErrors: {
               openai: openaiError.message,
@@ -133,7 +179,7 @@ exports.handler = async function(event, context) {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?",
+        response: "I'm here to help collect Tangkhul language examples. Could you share a phrase or word in Tangkhul with me?\n\n(Error Recovery)",
         error: error.message,
         stack: error.stack
       })
@@ -141,7 +187,7 @@ exports.handler = async function(event, context) {
   }
 };
 
-async function callOpenAIAPI(userMessage) {
+async function callOpenAIAPI(userMessage, isLikelyEnglish) {
   const openaiKey = process.env.OPENAI_API_KEY;
   
   if (!openaiKey) {
@@ -161,6 +207,8 @@ async function callOpenAIAPI(userMessage) {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has sent what appears to be a Tangkhul phrase. Ask them politely what it means in English.";
   } else if (isGreeting) {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has greeted you. Welcome them warmly and ask them to share a Tangkhul phrase or word with you.";
+  } else if (isLikelyEnglish) {
+    systemContent = "You are an AI assistant collecting Tangkhul language examples. The user has sent a message in English. Respond appropriately and ask them to share a phrase or word in Tangkhul language.";
   } else {
     systemContent = "You are an AI assistant collecting Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. If the user message is in Tangkhul, ask what it means. If it's in English, ask for a Tangkhul phrase related to the topic.";
   }
@@ -216,7 +264,7 @@ async function callOpenAIAPI(userMessage) {
   }
 }
 
-async function callPerplexityAPI(messages) {
+async function callPerplexityAPI(messages, isLikelyEnglish) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
   
   if (!perplexityKey) {
@@ -224,15 +272,44 @@ async function callPerplexityAPI(messages) {
   }
   
   console.log('Perplexity API key present');
-  console.log('Perplexity messages:', JSON.stringify(messages));
   
-  // Ensure there's a system message
-  if (!messages.some(msg => msg.role === 'system')) {
+  // Find if there's a user message and what it is
+  let userMessage = "";
+  const userMessages = messages.filter(msg => msg.role === "user");
+  if (userMessages.length > 0) {
+    userMessage = userMessages[userMessages.length - 1].content;
+  }
+  
+  // Find system message index
+  const systemIndex = messages.findIndex(msg => msg.role === "system");
+  
+  // If there's a system message, update it with language detection info
+  if (systemIndex >= 0 && userMessage) {
+    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+    
+    if (hasTangkhulChars) {
+      messages[systemIndex].content += " The user has sent what appears to be a Tangkhul phrase. Ask what it means in English.";
+    } else if (isLikelyEnglish) {
+      messages[systemIndex].content += " The user has sent a message in English. Ask them to share a phrase in Tangkhul.";
+    }
+  } else if (userMessage) {
+    // If no system message but we have a user message, add a system message
+    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+    let systemContent = "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time.";
+    
+    if (hasTangkhulChars) {
+      systemContent += " The user has sent what appears to be a Tangkhul phrase. Ask what it means in English.";
+    } else if (isLikelyEnglish) {
+      systemContent += " The user has sent a message in English. Ask them to share a phrase in Tangkhul.";
+    }
+    
     messages.unshift({
-      role: 'system',
-      content: 'You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time.'
+      role: "system",
+      content: systemContent
     });
   }
+  
+  console.log('Perplexity messages:', JSON.stringify(messages));
   
   // Prepare request body following Perplexity's format
   const requestBody = {
@@ -244,13 +321,9 @@ async function callPerplexityAPI(messages) {
     search_domain_filter: ["<any>"],
     return_images: false,
     return_related_questions: false,
-    top_k: 0,
     stream: false,
     presence_penalty: 0,
-    frequency_penalty: 0,
-    web_search_options: {
-      search_context_size: "high"
-    }
+    frequency_penalty: 0
   };
   
   // Log the full request for debugging
