@@ -64,11 +64,14 @@ export default function ChatInterface() {
     element.style.height = Math.min(Math.max(element.scrollHeight, 40), 120) + "px";
   };
 
+  // Modified to make Enter create new line instead of sending
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Shift+Enter now sends the message
+    if (e.key === "Enter" && e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
     }
+    // Regular Enter just creates a new line (default textarea behavior)
   };
 
   const handleLogout = async () => {
@@ -173,7 +176,7 @@ export default function ChatInterface() {
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type your message..."
+            placeholder="Type your message... (Shift+Enter to send)"
             className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-teal-200 resize-none overflow-y-auto min-h-[40px] max-h-[120px]"
             rows="1"
           />
