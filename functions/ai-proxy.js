@@ -57,7 +57,7 @@ exports.handler = async function(event, context) {
     }
     
     // Remove the thinking section from the response
-    response = removeThinkingSection(response);
+    response = cleanResponse(response);
     
     return {
       statusCode: 200, headers,
@@ -74,9 +74,31 @@ exports.handler = async function(event, context) {
   }
 };
 
-function removeThinkingSection(text) {
+function cleanResponse(text) {
   if (typeof text !== 'string') return text;
-  return text.replace(/<think>[\s\S]*?<\/think>/g, '');
+  
+  // More aggressive approach to remove the thinking section
+  // Option 1: Remove everything between <think> and </think> tags
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+  
+  // Option 2: If the tag isn't properly closed, remove from <think> to the next paragraph
+  if (cleaned.includes('<think>')) {
+    cleaned = cleaned.replace(/<think>[\s\S]*?\n\n/g, '');
+  }
+  
+  // Option 3: If the closing tag appears separately, remove it
+  cleaned = cleaned.replace(/<\/think>/g, '');
+  
+  // If there's still a thinking tag, remove it and any content after it
+  const thinkIndex = cleaned.indexOf('<think>');
+  if (thinkIndex !== -1) {
+    cleaned = cleaned.substring(0, thinkIndex);
+  }
+  
+  // Clean up any leading/trailing whitespace
+  cleaned = cleaned.trim();
+  
+  return cleaned;
 }
 
 async function callPerplexityAPI(messages) {
