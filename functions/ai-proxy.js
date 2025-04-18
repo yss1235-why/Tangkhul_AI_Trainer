@@ -1,5 +1,9 @@
 const fetch = require('node-fetch');
 
+// Store conversation histories in memory (will reset on function restart)
+// In production, you'd use a persistent store like Firebase, DynamoDB, etc.
+const conversationHistories = {};
+
 exports.handler = async function(event, context) {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -18,14 +22,15 @@ exports.handler = async function(event, context) {
     const requestBody = JSON.parse(event.body);
     console.log('Request body keys:', Object.keys(requestBody));
     
-    // Extract message data
+    // Extract message data and conversation ID
     let userMessage = "";
-    let messagesArray = [];
+    let conversationId = requestBody.conversationId || "default";
+    
+    console.log('Conversation ID:', conversationId);
     
     // Try to extract message from various possible structures
     if (requestBody.messages && Array.isArray(requestBody.messages)) {
-      messagesArray = requestBody.messages;
-      const userMessages = messagesArray.filter(msg => msg.role === "user");
+      const userMessages = requestBody.messages.filter(msg => msg.role === "user");
       if (userMessages.length > 0) {
         userMessage = userMessages[userMessages.length - 1].content;
       }
@@ -46,6 +51,25 @@ exports.handler = async function(event, context) {
       };
     }
     
+    // Get or initialize conversation history
+    if (!conversationHistories[conversationId]) {
+      console.log('Creating new conversation history');
+      conversationHistories[conversationId] = [
+        {
+          role: "system",
+          content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Keep responses concise and focused on collecting Tangkhul language examples."
+        }
+      ];
+    }
+    
+    // Add the user message to the conversation history
+    conversationHistories[conversationId].push({
+      role: "user",
+      content: userMessage
+    });
+    
+    console.log('Current conversation history:', JSON.stringify(conversationHistories[conversationId]));
+    
     // Initial language detection for better handling
     const normalizedMessage = userMessage.toLowerCase().trim();
     
@@ -53,17 +77,26 @@ exports.handler = async function(event, context) {
     const isOkay = ['okay', 'ok', 'k', 'kk', 'alright', 'alrighty', 'sure'].includes(normalizedMessage);
     
     if (isOkay) {
+      const response = "Great! I'd love to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul language?\n\n(Direct Response)";
+      
+      // Add assistant response to history
+      conversationHistories[conversationId].push({
+        role: "assistant",
+        content: response.split('\n\n')[0] // Store without the provider tag
+      });
+      
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: "Great! I'd love to learn some Tangkhul phrases. Could you teach me a word or phrase in Tangkhul language?\n\n(Direct Response)",
-          provider: 'direct'
+          response: response,
+          provider: 'direct',
+          conversationId: conversationId
         })
       };
     }
     
-    // Skip OpenAI due to quota issues, go straight to Perplexity
+    // Try Perplexity with the full conversation history
     try {
       console.log('Attempting Perplexity API call');
       
@@ -71,16 +104,26 @@ exports.handler = async function(event, context) {
         throw new Error('Missing Perplexity API key');
       }
       
-      // Properly format messages for Perplexity
-      const perplexityResponse = await callPerplexityAPI(userMessage);
+      // Make sure our history follows the alternating pattern rule
+      const validatedHistory = validateMessageSequence(conversationHistories[conversationId]);
+      
+      // Call Perplexity with the validated history
+      const perplexityResponse = await callPerplexityAPI(validatedHistory);
       console.log('Perplexity API call successful');
+      
+      // Add the assistant response to the conversation history
+      conversationHistories[conversationId].push({
+        role: "assistant",
+        content: perplexityResponse // Store without the provider tag
+      });
       
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
           response: perplexityResponse + "\n\n(Perplexity)",
-          provider: 'perplexity'
+          provider: 'perplexity',
+          conversationId: conversationId
         })
       };
     } catch (perplexityError) {
@@ -98,12 +141,19 @@ exports.handler = async function(event, context) {
         fallbackResponse = "Thank you for your message. I'd love to learn some Tangkhul phrases. Could you share a word or expression?";
       }
       
+      // Add the fallback response to history
+      conversationHistories[conversationId].push({
+        role: "assistant",
+        content: fallbackResponse // Store without the provider tag
+      });
+      
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          response: fallbackResponse + "\n\n(Fallback - Perplexity Error: " + perplexityError.message + ")",
+          response: fallbackResponse + "\n\n(Fallback - API Error: " + perplexityError.message + ")",
           provider: 'fallback',
+          conversationId: conversationId,
           apiError: perplexityError.message
         })
       };
@@ -122,37 +172,73 @@ exports.handler = async function(event, context) {
   }
 };
 
-async function callPerplexityAPI(userMessage) {
+// Function to ensure messages follow the required alternating pattern
+function validateMessageSequence(messages) {
+  // Clone the messages to avoid modifying the original
+  const result = [...messages];
+  
+  // Find the index of the first non-system message
+  const firstNonSystemIndex = result.findIndex(msg => msg.role !== 'system');
+  
+  // If there are no non-system messages, just return
+  if (firstNonSystemIndex === -1) {
+    return result;
+  }
+  
+  // Ensure the first non-system message is a user message
+  if (result[firstNonSystemIndex].role !== 'user') {
+    // Insert a dummy user message if needed
+    result.splice(firstNonSystemIndex, 0, {
+      role: 'user',
+      content: 'Hi'
+    });
+  }
+  
+  // Now check the alternation pattern after system messages
+  for (let i = firstNonSystemIndex; i < result.length - 1; i++) {
+    const currentRole = result[i].role;
+    const nextRole = result[i + 1].role;
+    
+    // If current is user, next should be assistant
+    if (currentRole === 'user' && nextRole !== 'assistant') {
+      // Insert a dummy assistant message
+      result.splice(i + 1, 0, {
+        role: 'assistant',
+        content: "I'd like to learn more about Tangkhul language."
+      });
+      i++; // Skip the inserted message in next iteration
+    }
+    // If current is assistant, next should be user
+    else if (currentRole === 'assistant' && nextRole !== 'user') {
+      // This shouldn't happen in our flow, but handle it anyway
+      result.splice(i + 1, 0, {
+        role: 'user',
+        content: "Let me share a Tangkhul phrase."
+      });
+      i++; // Skip the inserted message in next iteration
+    }
+  }
+  
+  // Ensure we end with alternating pattern
+  const lastMsg = result[result.length - 1];
+  if (lastMsg.role === 'assistant') {
+    // This shouldn't happen in our use case, but handle it
+    result.push({
+      role: 'user',
+      content: "Please tell me more about Tangkhul."
+    });
+  }
+  
+  console.log('Validated message sequence:', JSON.stringify(result));
+  return result;
+}
+
+async function callPerplexityAPI(messages) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
   
   if (!perplexityKey) {
     throw new Error('Missing Perplexity API key');
   }
-  
-  // Create properly formatted messages for Perplexity API
-  // IMPORTANT: After system message, roles must alternate between user and assistant
-  const messages = [
-    {
-      role: "system",
-      content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Keep responses concise and focused on collecting Tangkhul language examples."
-    },
-    {
-      role: "user",
-      content: userMessage
-    }
-  ];
-  
-  // If the user's message doesn't seem to be the first in a conversation,
-  // Add a dummy assistant message before it to ensure proper alternation
-  const isNewConversation = ['hi', 'hello', 'hey', 'greetings'].includes(userMessage.toLowerCase().trim());
-  if (!isNewConversation) {
-    messages.splice(1, 0, {
-      role: "assistant",
-      content: "Hello! I'd love to learn some Tangkhul phrases. Could you share a word or phrase in Tangkhul with me?"
-    });
-  }
-  
-  console.log('Perplexity messages:', JSON.stringify(messages));
   
   // Prepare request
   const requestBody = {
@@ -161,6 +247,8 @@ async function callPerplexityAPI(userMessage) {
     max_tokens: 300,
     temperature: 0.7
   };
+  
+  console.log('Sending request to Perplexity:', JSON.stringify(requestBody));
   
   try {
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
@@ -181,7 +269,6 @@ async function callPerplexityAPI(userMessage) {
     }
     
     const data = await response.json();
-    console.log('Perplexity response structure:', JSON.stringify(Object.keys(data)));
     
     if (!data.choices || !data.choices.length || !data.choices[0].message) {
       console.error('Unexpected Perplexity response format:', JSON.stringify(data));
@@ -189,17 +276,13 @@ async function callPerplexityAPI(userMessage) {
     }
     
     let aiResponse = data.choices[0].message.content;
-    console.log('Raw Perplexity response:', aiResponse);
     
     // Remove thinking sections if present
     if (aiResponse.includes('<think>')) {
-      aiResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-      console.log('Response after removing thinking sections:', aiResponse);
-      
-      // If we end up with empty content after filtering, use the original
-      if (!aiResponse) {
-        console.log('Empty response after filtering, using original');
-        aiResponse = data.choices[0].message.content;
+      const filteredResponse = aiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      // Only use filtered response if it's not empty
+      if (filteredResponse) {
+        aiResponse = filteredResponse;
       }
     }
     
