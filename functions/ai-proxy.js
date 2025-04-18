@@ -7,20 +7,13 @@ exports.handler = async function(event, context) {
     'Content-Type': 'application/json'
   };
 
-  // Handle OPTIONS request (preflight)
   if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers,
-      body: ''
-    };
+    return { statusCode: 200, headers, body: '' };
   }
 
-  // Only allow POST requests
   if (event.httpMethod !== 'POST') {
     return { 
-      statusCode: 405,
-      headers,
+      statusCode: 405, headers, 
       body: JSON.stringify({ error: 'Method Not Allowed' })
     };
   }
@@ -29,11 +22,9 @@ exports.handler = async function(event, context) {
     const requestBody = JSON.parse(event.body);
     const { messages, apiProvider } = requestBody;
     
-    // Validate input
     if (!messages || !Array.isArray(messages)) {
       return {
-        statusCode: 400,
-        headers,
+        statusCode: 400, headers,
         body: JSON.stringify({ error: 'Invalid messages format' })
       };
     }
@@ -41,30 +32,21 @@ exports.handler = async function(event, context) {
     let response;
     let error = null;
     
-    // Try preferred API first
     try {
       if (apiProvider === 'perplexity') {
-        console.log('Attempting to call Perplexity API with sonar-reasoning-pro model');
         response = await callPerplexityAPI(messages);
       } else {
-        console.log('Attempting to call OpenAI API');
         response = await callChatGPTAPI(messages);
       }
     } catch (apiError) {
       error = apiError;
-      console.error(`Error with ${apiProvider} API:`, apiError);
-      
-      // If first API fails, try fallback
       try {
-        console.log('Primary API failed, attempting fallback');
         response = apiProvider === 'perplexity' 
           ? await callChatGPTAPI(messages) 
           : await callPerplexityAPI(messages);
       } catch (fallbackError) {
-        console.error('Fallback API also failed:', fallbackError);
         return {
-          statusCode: 502,
-          headers,
+          statusCode: 502, headers,
           body: JSON.stringify({ 
             error: 'Both API services failed',
             primaryError: apiError.message,
@@ -74,19 +56,16 @@ exports.handler = async function(event, context) {
       }
     }
     
+    // Remove the thinking section from the response
+    response = removeThinkingSection(response);
+    
     return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ 
-        response,
-        usedFallback: error !== null
-      })
+      statusCode: 200, headers,
+      body: JSON.stringify({ response, usedFallback: error !== null })
     };
   } catch (error) {
-    console.error('Function error:', error);
     return {
-      statusCode: 500,
-      headers,
+      statusCode: 500, headers,
       body: JSON.stringify({ 
         error: 'Internal server error', 
         details: error.message 
@@ -94,6 +73,14 @@ exports.handler = async function(event, context) {
     };
   }
 };
+
+// Function to remove thinking section
+function removeThinkingSection(text) {
+  if (typeof text !== 'string') return text;
+  
+  // Remove content between <think> and </think> tags
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '');
+}
 
 async function callPerplexityAPI(messages) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
