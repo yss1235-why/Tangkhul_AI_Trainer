@@ -74,11 +74,8 @@ exports.handler = async function(event, context) {
   }
 };
 
-// Function to remove thinking section
 function removeThinkingSection(text) {
   if (typeof text !== 'string') return text;
-  
-  // Remove content between <think> and </think> tags
   return text.replace(/<think>[\s\S]*?<\/think>/g, '');
 }
 
@@ -96,7 +93,7 @@ async function callPerplexityAPI(messages) {
       'Authorization': `Bearer ${perplexityKey}`
     },
     body: JSON.stringify({
-      model: 'sonar-reasoning-pro',
+      model: 'sonar-reasoning',
       messages: messages,
       max_tokens: 500
     })
