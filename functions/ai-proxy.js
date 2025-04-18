@@ -28,25 +28,35 @@ exports.handler = async function(event, context) {
     // Log the user message
     console.log('User message:', userMessage);
     
-    // Common English greetings
-    const englishGreetings = ['hi', 'hello', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening'];
+    // Common English greetings and responses
+    const englishPhrases = [
+      'hi', 'hello', 'hey', 'greetings', 'good morning', 'good afternoon', 
+      'good evening', 'yes', 'no', 'thanks', 'thank you', 'ok', 'okay'
+    ];
     
-    // Check if the message is a simple English greeting
+    // Potential Tangkhul words (a small sample)
+    const tangkhulWords = ['ei', 'nang', 'aning', 'katha', 'kala', 'eina', 'mirin'];
+    
+    // Check if message contains special Tangkhul characters
+    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+    
+    // Normalize message for comparison
     const normalizedMessage = userMessage.toLowerCase().trim();
-    if (englishGreetings.some(greeting => normalizedMessage.includes(greeting))) {
+    
+    // Check if it's a common English phrase
+    if (englishPhrases.some(phrase => normalizedMessage === phrase || normalizedMessage.startsWith(phrase + ' '))) {
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({
-          response: "Hello! I'm the Tangkhul AI Trainer assistant. I'm here to help collect Tangkhul language examples. Would you be willing to share a Tangkhul phrase or word with me today?",
+          response: "I'd love to learn some Tangkhul phrases. Could you share a word or sentence in Tangkhul with me?",
           provider: 'direct'
         })
       };
     }
     
-    // Check if message might be in Tangkhul (contains special characters)
-    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
-    if (hasTangkhulChars) {
+    // Check if it might be Tangkhul (either has special chars or matches known Tangkhul words)
+    if (hasTangkhulChars || tangkhulWords.some(word => normalizedMessage === word || normalizedMessage.includes(' ' + word + ' '))) {
       return {
         statusCode: 200,
         headers,
@@ -57,12 +67,24 @@ exports.handler = async function(event, context) {
       };
     }
     
+    // For very short messages (1-2 words) that aren't recognized as English phrases
+    if (normalizedMessage.split(' ').length <= 2 && normalizedMessage.length < 12) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          response: "Is that a Tangkhul word or phrase? Could you tell me what it means in English?",
+          provider: 'direct'
+        })
+      };
+    }
+    
     // For other messages in English, provide a generic response
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        response: "That's interesting. Could you share a phrase or sentence in Tangkhul that relates to what you just mentioned?",
+        response: "Thank you for sharing. Could you teach me how to say something similar in Tangkhul?",
         provider: 'direct'
       })
     };
