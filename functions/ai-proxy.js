@@ -40,11 +40,13 @@ exports.handler = async function(event, context) {
       }
     } catch (apiError) {
       error = apiError;
+      console.error('Primary API error:', apiError);
       try {
         response = apiProvider === 'perplexity' 
           ? await callChatGPTAPI(messages) 
           : await callPerplexityAPI(messages);
       } catch (fallbackError) {
+        console.error('Fallback API error:', fallbackError);
         return {
           statusCode: 502, headers,
           body: JSON.stringify({ 
@@ -56,14 +58,16 @@ exports.handler = async function(event, context) {
       }
     }
     
-    // Remove the thinking section from the response
+    // Clean and log response size
     response = cleanResponse(response);
+    console.log(`Response length: ${response ? response.length : 0} characters`);
     
     return {
       statusCode: 200, headers,
       body: JSON.stringify({ response, usedFallback: error !== null })
     };
   } catch (error) {
+    console.error('General function error:', error);
     return {
       statusCode: 500, headers,
       body: JSON.stringify({ 
@@ -77,28 +81,22 @@ exports.handler = async function(event, context) {
 function cleanResponse(text) {
   if (typeof text !== 'string') return text;
   
-  // More aggressive approach to remove the thinking section
-  // Option 1: Remove everything between <think> and </think> tags
+  // Remove thinking section
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, '');
   
-  // Option 2: If the tag isn't properly closed, remove from <think> to the next paragraph
+  // Handle improperly formatted tags
   if (cleaned.includes('<think>')) {
     cleaned = cleaned.replace(/<think>[\s\S]*?\n\n/g, '');
   }
-  
-  // Option 3: If the closing tag appears separately, remove it
   cleaned = cleaned.replace(/<\/think>/g, '');
   
-  // If there's still a thinking tag, remove it and any content after it
+  // Remove any remaining thinking sections
   const thinkIndex = cleaned.indexOf('<think>');
   if (thinkIndex !== -1) {
     cleaned = cleaned.substring(0, thinkIndex);
   }
   
-  // Clean up any leading/trailing whitespace
-  cleaned = cleaned.trim();
-  
-  return cleaned;
+  return cleaned.trim();
 }
 
 async function callPerplexityAPI(messages) {
@@ -117,7 +115,7 @@ async function callPerplexityAPI(messages) {
     body: JSON.stringify({
       model: 'sonar-reasoning',
       messages: messages,
-      max_tokens: 500
+      max_tokens: 2000  // Increased from 500 to 2000
     })
   });
   
@@ -127,9 +125,10 @@ async function callPerplexityAPI(messages) {
   }
   
   const data = await response.json();
+  console.log('Perplexity API response data structure:', Object.keys(data));
   
   if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-    throw new Error(`Invalid response from Perplexity API: ${JSON.stringify(data)}`);
+    throw new Error('Invalid Perplexity API response structure');
   }
   
   return data.choices[0].message.content;
@@ -151,7 +150,7 @@ async function callChatGPTAPI(messages) {
     body: JSON.stringify({
       model: 'gpt-3.5-turbo',
       messages: messages,
-      max_tokens: 500
+      max_tokens: 2000  // Increased from 500 to 2000
     })
   });
   
@@ -163,7 +162,7 @@ async function callChatGPTAPI(messages) {
   const data = await response.json();
   
   if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-    throw new Error(`Invalid response from OpenAI API: ${JSON.stringify(data)}`);
+    throw new Error('Invalid OpenAI API response structure');
   }
   
   return data.choices[0].message.content;
