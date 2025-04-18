@@ -17,6 +17,9 @@ exports.handler = async function(event, context) {
     const requestBody = JSON.parse(event.body);
     const userMessage = requestBody.message || "";
     
+    // Simple language detection (Tangkhul has special characters like macrons and underlines)
+    const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+    
     // Try Perplexity first (primary service)
     try {
       console.log('Attempting Perplexity API call');
@@ -51,11 +54,12 @@ exports.handler = async function(event, context) {
   } catch (error) {
     console.error('Function error:', error);
     
+    // Improved error fallback that doesn't assume language
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
-        response: "Thank you for sharing that Tangkhul phrase. Could you tell me what it means in English?",
+        response: "I'm having trouble processing your message. Could you please try again or rephrase?",
         error: error.message
       })
     };
@@ -80,7 +84,7 @@ async function callPerplexityAPI(userMessage) {
       messages: [
         {
           role: "system",
-          content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples."
+          content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples. Important: Determine if the user's message is in English or Tangkhul before responding. If it's in English, respond appropriately without asking for a translation. Tangkhul language typically contains special characters like macrons (ā, Ā) and underlines (a̲, A̲)."
         },
         {
           role: "user",
@@ -112,6 +116,12 @@ async function callOpenAIAPI(userMessage) {
     throw new Error('Missing OpenAI API key');
   }
   
+  // Check if message might be in Tangkhul (simple check for special characters)
+  const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
+  const prompt = hasTangkhulChars
+    ? `You are an AI assistant collecting Tangkhul language examples. The user has sent what appears to be a Tangkhul phrase: "${userMessage}". Ask them politely what it means in English.`
+    : `You are an AI assistant collecting Tangkhul language examples. The user has sent a message in English: "${userMessage}". Respond appropriately in English and ask ONE question to elicit Tangkhul language examples.`;
+  
   const response = await fetch('https://api.openai.com/v1/completions', {
     method: 'POST',
     headers: {
@@ -120,7 +130,7 @@ async function callOpenAIAPI(userMessage) {
     },
     body: JSON.stringify({
       model: 'gpt-3.5-turbo-instruct',
-      prompt: `You are an AI assistant collecting Tangkhul language examples. Respond to this message: "${userMessage}". Ask ONE question about Tangkhul language.`,
+      prompt: prompt,
       max_tokens: 150,
       temperature: 0.7
     })
