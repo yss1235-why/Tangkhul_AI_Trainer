@@ -15,15 +15,42 @@ exports.handler = async function(event, context) {
 
   try {
     const requestBody = JSON.parse(event.body);
-    const userMessage = requestBody.message || "";
     
-    // Simple language detection (Tangkhul has special characters like macrons and underlines)
+    // Extract the user message from the messages array structure
+    let userMessage = "";
+    
+    if (requestBody.message) {
+      // If message is sent directly (simple format)
+      userMessage = requestBody.message;
+    } else if (requestBody.messages && Array.isArray(requestBody.messages)) {
+      // If messages array is provided (chat format)
+      // Find the last user message in the array
+      const userMessages = requestBody.messages.filter(msg => msg.role === "user");
+      if (userMessages.length > 0) {
+        userMessage = userMessages[userMessages.length - 1].content;
+      }
+    }
+    
+    console.log('Processed user message:', userMessage);
+    
+    if (!userMessage) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          response: "I couldn't understand your message. Could you please try again?",
+          error: "No user message found"
+        })
+      };
+    }
+    
+    // Simple language detection
     const hasTangkhulChars = /[ĀāA̲a̲]/.test(userMessage);
     
     // Try Perplexity first (primary service)
     try {
       console.log('Attempting Perplexity API call');
-      const perplexityResponse = await callPerplexityAPI(userMessage);
+      const perplexityResponse = await callPerplexityAPI(userMessage, requestBody.messages);
       console.log('Perplexity API call successful');
       
       return {
@@ -54,7 +81,6 @@ exports.handler = async function(event, context) {
   } catch (error) {
     console.error('Function error:', error);
     
-    // Improved error fallback that doesn't assume language
     return {
       statusCode: 200,
       headers,
@@ -66,11 +92,30 @@ exports.handler = async function(event, context) {
   }
 };
 
-async function callPerplexityAPI(userMessage) {
+async function callPerplexityAPI(userMessage, previousMessages = []) {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
   
   if (!perplexityKey) {
     throw new Error('Missing Perplexity API key');
+  }
+  
+  // Prepare messages array for API call
+  let messages = [
+    {
+      role: "system",
+      content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples. Important: Determine if the user's message is in English or Tangkhul before responding. If it's in English, respond appropriately without asking for a translation. Tangkhul language typically contains special characters like macrons (ā, Ā) and underlines (a̲, A̲)."
+    }
+  ];
+  
+  // If previous messages array is provided, use it
+  if (Array.isArray(previousMessages) && previousMessages.length > 0) {
+    messages = previousMessages;
+  } else {
+    // Otherwise just add the user message
+    messages.push({
+      role: "user",
+      content: userMessage
+    });
   }
   
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
@@ -81,16 +126,7 @@ async function callPerplexityAPI(userMessage) {
     },
     body: JSON.stringify({
       model: 'sonar-reasoning',
-      messages: [
-        {
-          role: "system",
-          content: "You are an AI assistant designed to collect Tangkhul language examples. Use only English in your responses. Ask only ONE question at a time. Focus on eliciting specific language examples. Important: Determine if the user's message is in English or Tangkhul before responding. If it's in English, respond appropriately without asking for a translation. Tangkhul language typically contains special characters like macrons (ā, Ā) and underlines (a̲, A̲)."
-        },
-        {
-          role: "user",
-          content: userMessage
-        }
-      ],
+      messages: messages,
       max_tokens: 150,
       temperature: 0.7
     })
